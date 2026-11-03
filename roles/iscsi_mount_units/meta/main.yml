@@ -1,0 +1,11 @@
+---
+galaxy_info:
+  author: Richard Lynch
+  description: >-
+    Generate a systemd iSCSI login unit that waits for the portal to answer and retries on failure,
+    and a mount unit that requires it; stage and validate both with systemd-analyze, show the diff
+    against the live units, and install them only when asked.
+  license: GPL-3.0-or-later
+  min_ansible_version: "2.19"
+  galaxy_tags: [iscsi, systemd, mount, storage]
+dependencies: []

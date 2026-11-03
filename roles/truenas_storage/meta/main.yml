@@ -1,0 +1,12 @@
+---
+galaxy_info:
+  author: Richard Lynch
+  description: >-
+    Reconcile TrueNAS zvol sizes and datasets through the appliance's REST API: grow existing zvols
+    (never shrink, within a pool-capacity ceiling), create missing datasets, and recursively destroy
+    only explicitly confirmed, size-checked, unreferenced targets. Reports a plan and changes nothing
+    unless asked.
+  license: GPL-3.0-or-later
+  min_ansible_version: "2.19"
+  galaxy_tags: [truenas, zfs, storage]
+dependencies: []

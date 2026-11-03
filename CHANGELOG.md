@@ -9,6 +9,17 @@ All notable changes to this collection are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the collection
 uses [Semantic Versioning](https://semver.org/).
 
+## [1.0.1] — 2026-11-03
+
+### Added
+
+- `meta/main.yml` with `galaxy_info` (author, description, license, minimum Ansible version, tags)
+  for `iscsi_mount_units` and `truenas_storage`, so every role carries a description on Galaxy.
+
+### Changed
+
+- CI, disclosure and release callers use ansible-devkit v0.2.2.
+
 ## [1.0.0] — 2026-11-03
 
 ### Added

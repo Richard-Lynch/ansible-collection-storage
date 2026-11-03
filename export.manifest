@@ -29,6 +29,7 @@ roles/iscsi_mount_units/README.md
 roles/iscsi_mount_units/defaults/main.yml
 roles/iscsi_mount_units/meta/argument_specs.py
 roles/iscsi_mount_units/meta/argument_specs.yml
+roles/iscsi_mount_units/meta/main.yml
 roles/iscsi_mount_units/molecule/default/converge.yml
 roles/iscsi_mount_units/molecule/default/files/findmnt
 roles/iscsi_mount_units/molecule/default/files/iscsiadm
@@ -92,6 +93,7 @@ roles/truenas_storage/README.md
 roles/truenas_storage/defaults/main.yml
 roles/truenas_storage/meta/argument_specs.py
 roles/truenas_storage/meta/argument_specs.yml
+roles/truenas_storage/meta/main.yml
 roles/truenas_storage/molecule/default/converge.yml
 roles/truenas_storage/molecule/default/molecule.yml
 roles/truenas_storage/molecule/default/verify.yml
