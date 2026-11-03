@@ -1,0 +1,61 @@
+---
+- name: Converge — exercise the input gates
+  hosts: localhost
+  gather_facts: false
+  vars:
+    # a placeholder long enough for the role's length gate; not a credential
+    _key: "{{ 'x' * 32 }}"
+  tasks:
+    - name: Call with no URL at all (the argspec must refuse it)
+      block:
+        - name: Run the role without truenas_exporter_url
+          ansible.builtin.include_role:
+            name: truenas_exporter
+          vars:
+            truenas_exporter_api_key: "{{ _key }}"
+        - name: Record that it was NOT refused
+          ansible.builtin.set_fact:
+            _no_url_refused: false
+      rescue:
+        - name: Record the refusal and its message
+          ansible.builtin.set_fact:
+            _no_url_refused: true
+            _no_url_msg: "{{ ansible_failed_result.msg | default('') }}"
+
+    - name: Call with a plain-http URL (the URL gate must refuse it)
+      block:
+        - name: Run the role with an http URL
+          ansible.builtin.include_role:
+            name: truenas_exporter
+          vars:
+            truenas_exporter_url: "http://192.0.2.10"
+            truenas_exporter_api_key: "{{ _key }}"
+        - name: Record that it was NOT refused
+          ansible.builtin.set_fact:
+            _http_refused: false
+      rescue:
+        - name: Record the refusal
+          ansible.builtin.set_fact:
+            _http_refused: true
+
+    - name: Dry run with valid inputs (reports, deploys nothing)
+      ansible.builtin.include_role:
+        name: truenas_exporter
+      vars:
+        truenas_exporter_url: "https://192.0.2.10"
+        truenas_exporter_api_key: "{{ _key }}"
+        truenas_exporter_apply: false
+
+    - name: Record that the dry run completed
+      ansible.builtin.set_fact:
+        _dry_run_done: true
+
+    # converge and verify are separate ansible-playbook runs, so facts do not survive between them:
+    # hand the results over in a file.
+    - name: Write the results for verify.yml
+      ansible.builtin.copy:
+        dest: /tmp/molecule-truenas-exporter-results.json
+        mode: "0600"
+        content: >-
+          {{ {'no_url_refused': _no_url_refused, 'no_url_msg': _no_url_msg | default(''),
+              'http_refused': _http_refused, 'dry_run_done': _dry_run_done} | to_nice_json }}

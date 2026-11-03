@@ -1,0 +1,18 @@
+---
+# Replays the role's decision expressions against an invented appliance fixture
+# (pool1/media at 11.5T, tank/media at 7.19T). Kept in lockstep with tasks/main.yml.
+- name: Converge
+  hosts: localhost
+  gather_facts: false
+  vars:
+    # shapes match TrueNAS's /pool/dataset payload: sizes are strings under .rawvalue
+    fixture_datasets:
+      - name: "pool1/media"
+        volsize: {rawvalue: "12644383719424"}   # 11.5 TiB
+      - name: "tank/media"
+        volsize: {rawvalue: "7906543210496"}    # ~7.19 TiB
+      - name: "tank"
+  tasks:
+    - name: Index by name (as the role does)
+      ansible.builtin.set_fact:
+        existing: "{{ dict(fixture_datasets | map(attribute='name') | zip(fixture_datasets)) }}"

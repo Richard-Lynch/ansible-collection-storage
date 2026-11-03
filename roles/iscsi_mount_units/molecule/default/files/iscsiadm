@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Fake iscsiadm: no active session (the post-reboot state).
+exit 0

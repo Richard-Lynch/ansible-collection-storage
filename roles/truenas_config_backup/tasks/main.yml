@@ -1,0 +1,290 @@
+---
+# truenas_config_backup — export the TrueNAS config DB via its own `config.save` middleware method
+# (the mechanism behind the UI's "Save Config" button) and fetch the verified artefact to the
+# controller. Runs ON the appliance via `midclt`, as truenas_snapshot_tasks does — midclt
+# authenticates locally as root, so this adds no new credential.
+#
+# OUT OF SCOPE, deliberately: the ZFS pool data itself. This role only protects
+# /data/freenas-v1.db — the config that describes the pools, not the pools themselves. See the
+# README for the two-layer explanation.
+#
+# GENERATE-DON'T-APPLY: with truenas_config_backup_apply=false (default) this only confirms midclt
+# is reachable and reports the export it WOULD run. Set truenas_config_backup_apply=true to actually
+# export, verify, and fetch the artefact to the controller.
+
+- name: Resolve inputs (var | default(var__default), matching the truenas_storage convention)
+  ansible.builtin.set_fact:
+    _tn_cfg_remote_dir: >-
+      {{ truenas_config_backup_remote_dir | default(truenas_config_backup_remote_dir__default) }}
+    _tn_cfg_secretseed: >-
+      {{ truenas_config_backup_secretseed | default(truenas_config_backup_secretseed__default) | bool }}
+    _tn_cfg_root_authorized_keys: >-
+      {{ truenas_config_backup_root_authorized_keys
+         | default(truenas_config_backup_root_authorized_keys__default) | bool }}
+    _tn_cfg_local_staging_dir: >-
+      {{ truenas_config_backup_local_staging_dir
+         | default(truenas_config_backup_local_staging_dir__default) }}
+    _tn_cfg_min_size_bytes: >-
+      {{ truenas_config_backup_min_size_bytes | default(truenas_config_backup_min_size_bytes__default) | int }}
+    _tn_cfg_fallback_to_raw_db: >-
+      {{ truenas_config_backup_fallback_to_raw_db
+         | default(truenas_config_backup_fallback_to_raw_db__default) | bool }}
+    _tn_cfg_apply: >-
+      {{ truenas_config_backup_apply | default(truenas_config_backup_apply__default) | bool }}
+
+- name: Confirm midclt is reachable and the appliance identifies as expected
+  ansible.builtin.command: midclt call system.info
+  register: _tn_sysinfo
+  changed_when: false
+  failed_when: _tn_sysinfo.rc != 0
+
+- name: HARD GATE — midclt must respond before attempting an export
+  ansible.builtin.assert:
+    that:
+      - _tn_sysinfo.rc == 0
+      - (_tn_sysinfo.stdout | from_json).hostname is defined
+    fail_msg: >-
+      midclt did not respond with valid system.info on {{ inventory_hostname }}
+      (rc={{ _tn_sysinfo.rc }}): {{ (_tn_sysinfo.stderr | default(''))[:300] }}
+    quiet: true
+
+- name: Build the export filename (dated, so a failed run never overwrites the last good export)
+  ansible.builtin.set_fact:
+    _tn_export_stamp: "{{ lookup('pipe', 'date -u +%Y%m%dT%H%M%SZ') }}"
+
+- name: Set the planned remote export path
+  ansible.builtin.set_fact:
+    _tn_export_remote_path: >-
+      {{ _tn_cfg_remote_dir }}/truenas-config-{{ _tn_export_stamp }}.tar
+
+- name: Report the export plan (generate-don't-apply preview)
+  ansible.builtin.debug:
+    msg: >-
+      PREVIEW (truenas_config_backup_apply=false — nothing exported): would run
+      `midclt call -job config.save` (secretseed={{ _tn_cfg_secretseed }},
+      root_authorized_keys={{ _tn_cfg_root_authorized_keys }}) on {{ inventory_hostname }},
+      write it to {{ _tn_export_remote_path }}, verify it (min {{ _tn_cfg_min_size_bytes }} bytes,
+      valid tar/SQLite), then fetch it to
+      {{ _tn_cfg_local_staging_dir }}/{{ _tn_export_remote_path | basename }} on the controller.
+      Re-run with EXTRA='truenas_config_backup_apply=true' to actually do this.
+  when: not _tn_cfg_apply
+
+# =====================================================================================================
+# Everything below only runs when truenas_config_backup_apply=true.
+# =====================================================================================================
+
+- name: Ensure the scratch export directory exists
+  ansible.builtin.file:
+    path: "{{ _tn_cfg_remote_dir }}"
+    state: directory
+    mode: "0700"
+  when: _tn_cfg_apply
+
+# --- native export via core.download, which is how a DOWNLOADABLE job is retrieved.
+# `midclt call -j config.save > file` does NOT work: config.save writes to a job PIPE, not stdout,
+# so it fails with "Pipe 'output' is not open". core.download(method, params, filename) runs the
+# job and returns [job_id, url]; the artefact is then fetched over the appliance's own HTTP
+# endpoint on localhost, with no websocket/HTTP session of the role's own. `core.get_methods`
+# reports config.save as `job: True, downloadable: True, check_pipes: True`, which is what makes
+# core.download the right call. (The CLI job flag is `-j`/`--job` on the `call` subcommand; `-job`
+# is parsed as `-j` + `ob` and fails with `unrecognized arguments: -ob`.) -------------------------
+- name: Export the TrueNAS config via the native config.save middleware method
+  ansible.builtin.shell:
+    cmd: >-
+      set -o pipefail;
+      url=$(midclt -q call core.download config.save '[{
+        "secretseed": {{ _tn_cfg_secretseed | lower }},
+        "root_authorized_keys": {{ _tn_cfg_root_authorized_keys | lower }}
+      }]' 'truenas-config.tar' | python3 -c 'import sys,json; print(json.load(sys.stdin)[1])');
+      test -n "$url";
+      curl -sfk --max-time 300 "http://127.0.0.1$url" -o {{ _tn_export_remote_path | quote }}
+    executable: /bin/bash
+  register: _tn_export
+  changed_when: _tn_export.rc == 0
+  failed_when: false
+  when: _tn_cfg_apply
+  # NOT no_log: the command line contains no secret (secretseed/root_authorized_keys are booleans,
+  # not values) and the failure output is the ONLY way to see why an export broke. no_log belongs on
+  # tasks that carry a secret, and this one does not.
+
+- name: Fall back to a raw copy of freenas-v1.db if the native export failed and the fallback is enabled
+  when:
+    - _tn_cfg_apply
+    - _tn_export.rc != 0
+    - _tn_cfg_fallback_to_raw_db
+  block:
+    - name: Report the native export failure before falling back
+      ansible.builtin.debug:
+        msg: >-
+          config.save failed (rc={{ _tn_export.rc }}): {{ (_tn_export.stderr | default(''))[:300] }}.
+          Falling back to a raw copy of /data/freenas-v1.db, per
+          truenas_config_backup_fallback_to_raw_db=true. CAVEAT: a raw copy of a live SQLite file can
+          be caught mid-write and is not guaranteed consistent — this is a documented last resort,
+          not the preferred path.
+
+    - name: Set the fallback export path (.db extension, so its type is honest)
+      ansible.builtin.set_fact:
+        _tn_export_remote_path: >-
+          {{ _tn_cfg_remote_dir }}/freenas-v1-{{ _tn_export_stamp }}.db
+
+    # Prefer TrueNAS's OWN nightly export over /data/freenas-v1.db. The appliance already writes a
+    # dated copy to /var/db/system/configs-*/<version>/YYYYMMDD.db every night, and those are written by the middleware rather than copied out from under a live
+    # writer — so they do not carry the mid-write inconsistency risk a raw cp of the live DB does.
+    #
+    # Crucially they live in the system dataset (`<pool>/.system`), i.e. on the very pool this NAS serves. They protect
+    # against config corruption but NOT against losing the pool or the appliance, which is exactly the gap
+    # this role closes by pulling a copy off the appliance entirely.
+    - name: Find the newest of TrueNAS's own nightly config exports
+      ansible.builtin.shell:
+        cmd: >-
+          set -o pipefail;
+          ls -1t /var/db/system/configs-*/*/[0-9]*.db 2>/dev/null | head -1
+        executable: /bin/bash
+      register: _tn_nightly
+      changed_when: false
+      failed_when: false
+
+    - name: Copy the best available config DB
+      ansible.builtin.command:
+        cmd: >-
+          cp -p {{ (_tn_nightly.stdout | trim) if (_tn_nightly.stdout | default('') | trim | length > 0)
+                   else '/data/freenas-v1.db' }} {{ _tn_export_remote_path }}
+      register: _tn_fallback_copy
+      changed_when: _tn_fallback_copy.rc == 0
+      failed_when: _tn_fallback_copy.rc != 0
+
+    - name: Mark that the fallback path was used
+      ansible.builtin.set_fact:
+        _tn_used_fallback: true
+
+- name: HARD GATE — an export must exist by now (native succeeded, or an enabled fallback ran)
+  ansible.builtin.assert:
+    that:
+      - (_tn_export.rc == 0) or _tn_cfg_fallback_to_raw_db
+    fail_msg: >-
+      config.save failed (rc={{ _tn_export.rc }}): {{ (_tn_export.stderr | default(''))[:300] }}.
+      No export was produced, and truenas_config_backup_fallback_to_raw_db is false so no raw-DB
+      fallback was attempted. Set it true to allow the (less consistent) raw-copy fallback, or fix
+      the underlying midclt failure.
+    quiet: true
+  when: _tn_cfg_apply
+
+# --- verify by read-back: existence, size, and file type. A command that exited 0 is not proof of
+# a backup; a file that exists, is big enough and has the right magic bytes is. -------------------
+- name: Stat the exported artefact
+  ansible.builtin.stat:
+    path: "{{ _tn_export_remote_path }}"
+    get_checksum: true
+  register: _tn_export_stat
+  when: _tn_cfg_apply
+
+- name: HARD GATE — the artefact must exist and be non-empty
+  ansible.builtin.assert:
+    that:
+      - _tn_export_stat.stat.exists
+      - _tn_export_stat.stat.size | int > 0
+    fail_msg: "Export artefact {{ _tn_export_remote_path }} does not exist or is empty."
+    quiet: true
+  when: _tn_cfg_apply
+
+- name: HARD GATE — the artefact must exceed the minimum sane size
+  # The failure mode this gate exists for: a tiny file that LOOKS like a backup and restores
+  # nothing. A genuine export (the DB alone is hundreds of KB; DB+keys+seed as a tar is larger) will
+  # clear a 100KB floor by a wide margin. Anything under that is treated as a failed export, not a
+  # small-but-valid one.
+  ansible.builtin.assert:
+    that:
+      - _tn_export_stat.stat.size | int >= (_tn_cfg_min_size_bytes | int)
+    fail_msg: >-
+      Export artefact {{ _tn_export_remote_path }} is only {{ _tn_export_stat.stat.size }} bytes
+      (minimum {{ _tn_cfg_min_size_bytes }}) — a small file that looks like a backup and restores
+      nothing. Refusing to treat it as valid.
+    success_msg: >-
+      Export artefact is {{ _tn_export_stat.stat.size }} bytes — clears the
+      {{ _tn_cfg_min_size_bytes }}-byte minimum.
+    quiet: true
+  when: _tn_cfg_apply
+
+- name: Identify the artefact's actual file type
+  ansible.builtin.command: "file -b {{ _tn_export_remote_path }}"
+  register: _tn_export_filetype
+  changed_when: false
+  failed_when: false
+  when: _tn_cfg_apply
+
+- name: HARD GATE — the artefact must be a real tar or SQLite database, not an error page or junk
+  ansible.builtin.assert:
+    that:
+      - _tn_export_filetype.rc == 0
+      - (_tn_export_filetype.stdout is search('tar archive')) or (_tn_export_filetype.stdout is search('SQLite'))
+    fail_msg: >-
+      Export artefact {{ _tn_export_remote_path }} does not look like a tar archive or SQLite
+      database: `file` reports "{{ _tn_export_filetype.stdout | default('?') }}"
+      (rc={{ _tn_export_filetype.rc }}). Refusing to treat it as a valid backup.
+    success_msg: "Export artefact identified as: {{ _tn_export_filetype.stdout }}"
+    quiet: true
+  when: _tn_cfg_apply
+
+- name: Report the export result
+  ansible.builtin.debug:
+    msg: >-
+      TrueNAS config export OK: {{ _tn_export_remote_path }}
+      ({{ _tn_export_stat.stat.size }} bytes, {{ _tn_export_filetype.stdout }})
+      {{ '[FALLBACK: raw freenas-v1.db copy, native config.save failed]' if _tn_used_fallback | default(false) else '[native config.save export]' }}
+  when: _tn_cfg_apply
+
+# --- fetch to the controller so a separate play can push it onward to durable storage --------------
+- name: Ensure the controller-local staging directory exists
+  ansible.builtin.file:
+    path: "{{ _tn_cfg_local_staging_dir }}"
+    state: directory
+    mode: "0700"
+  delegate_to: localhost
+  become: false
+  when: _tn_cfg_apply
+
+- name: Fetch the verified artefact to the controller
+  ansible.builtin.fetch:
+    src: "{{ _tn_export_remote_path }}"
+    dest: "{{ _tn_cfg_local_staging_dir }}/{{ _tn_export_remote_path | basename }}"
+    flat: true
+  register: _tn_fetched
+  when: _tn_cfg_apply
+
+- name: Verify the fetched copy on the controller matches the remote checksum
+  # A truncated fetch would otherwise silently ship a corrupt artefact onward as if it were good.
+  ansible.builtin.stat:
+    path: "{{ _tn_cfg_local_staging_dir }}/{{ _tn_export_remote_path | basename }}"
+    get_checksum: true
+  register: _tn_local_stat
+  delegate_to: localhost
+  become: false
+  when: _tn_cfg_apply
+
+- name: HARD GATE — the controller-side copy must match the appliance-side checksum
+  ansible.builtin.assert:
+    that:
+      - _tn_local_stat.stat.exists
+      - _tn_local_stat.stat.checksum == _tn_export_stat.stat.checksum
+    fail_msg: >-
+      Fetched artefact checksum mismatch: appliance={{ _tn_export_stat.stat.checksum }}
+      controller={{ _tn_local_stat.stat.checksum | default('MISSING') }}. The fetch may have been
+      truncated — refusing to treat the staged copy as trustworthy.
+    success_msg: "Fetched artefact checksum verified: {{ _tn_local_stat.stat.checksum }}"
+    quiet: true
+  when: _tn_cfg_apply
+
+- name: Clean up the scratch export on the appliance (the controller now holds the verified copy)
+  ansible.builtin.file:
+    path: "{{ _tn_export_remote_path }}"
+    state: absent
+  when: _tn_cfg_apply
+
+- name: Set facts the calling play uses to push the artefact onward
+  ansible.builtin.set_fact:
+    truenas_config_backup_staged_file: >-
+      {{ _tn_cfg_local_staging_dir }}/{{ _tn_export_remote_path | basename }}
+    truenas_config_backup_staged_size: "{{ _tn_export_stat.stat.size }}"
+    truenas_config_backup_staged_checksum: "{{ _tn_export_stat.stat.checksum }}"
+    truenas_config_backup_used_fallback: "{{ _tn_used_fallback | default(false) }}"
+  when: _tn_cfg_apply

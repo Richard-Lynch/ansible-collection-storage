@@ -1,0 +1,12 @@
+---
+galaxy_info:
+  role_name: truenas_exporter
+  namespace: richard_lynch
+  author: Richard Lynch
+  description: Off-box Prometheus exporter for TrueNAS pool health.
+  license: GPL-3.0-or-later
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Debian
+      versions: [bookworm]
+dependencies: []

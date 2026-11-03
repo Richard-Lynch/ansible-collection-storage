@@ -1,0 +1,78 @@
+---
+# backup_restore_drill — prove a restore. READ-ONLY against the repo. Fails loud if the
+# restore doesn't come back or an expected artifact is missing/empty.
+
+- name: Assert the repo + creds are available (backups must exist to drill them)
+  ansible.builtin.assert:
+    that:
+      - restore_drill_repo | length > 0
+      - restore_drill_password | length > 0
+      - restore_drill_b2_key_id | length > 0
+      - restore_drill_b2_app_key | length > 0
+    fail_msg: >-
+      restore drill needs the restic repo + B2 creds (from restic_backup / your secret store).
+      Provision the B2 bucket + key and let at least one backup run before a restore can be proven.
+    quiet: true
+
+- name: Assert at least one expected artifact is declared (a drill that checks nothing proves nothing)
+  ansible.builtin.assert:
+    that:
+      - restore_drill_expected_artifacts | length > 0
+    fail_msg: "Declare restore_drill_expected_artifacts — the drill must assert a known file returns."
+    quiet: true
+
+- name: Verify repository integrity (reads a subset of real pack data)
+  ansible.builtin.command:
+    cmd: "restic check --read-data-subset {{ restore_drill_read_data_subset }}"
+  environment: &restic_env
+    RESTIC_REPOSITORY: "{{ restore_drill_repo }}"
+    RESTIC_PASSWORD: "{{ restore_drill_password }}"
+    B2_ACCOUNT_ID: "{{ restore_drill_b2_key_id }}"
+    B2_ACCOUNT_KEY: "{{ restore_drill_b2_app_key }}"
+  changed_when: false
+  when: restore_drill_read_data_subset | length > 0
+
+- name: Reset the scratch restore target (never a live path)
+  ansible.builtin.file:
+    path: "{{ restore_drill_target }}"
+    state: "{{ item }}"
+    mode: "0700"
+  loop: [absent, directory]
+
+- name: Restore the latest snapshot to the scratch target
+  ansible.builtin.command:
+    cmd: "restic restore latest --target {{ restore_drill_target }}"
+  environment: *restic_env
+  changed_when: true
+
+- name: Stat each expected artifact under the restored tree
+  ansible.builtin.stat:
+    path: "{{ restore_drill_target }}/{{ item.path }}"
+  loop: "{{ restore_drill_expected_artifacts }}"
+  loop_control:
+    label: "{{ item.path }}"
+  register: _restored
+
+- name: Assert every expected artifact restored non-empty (the restore is USEFUL, not just present)
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.size >= (item.item.min_bytes | default(1))
+    fail_msg: >-
+      restore drill FAILED: {{ item.item.path }} missing or too small
+      (exists={{ item.stat.exists }}, size={{ item.stat.size | default(0) }}).
+    success_msg: "restored {{ item.item.path }} ({{ item.stat.size }} bytes) — OK."
+    quiet: true
+  loop: "{{ _restored.results }}"
+  loop_control:
+    label: "{{ item.item.path }}"
+
+- name: ZFS snapshot rollback drill (throwaway dataset)
+  ansible.builtin.import_tasks: zfs_drill.yml
+  when: restore_drill_zfs_enabled | bool
+
+- name: Report success
+  ansible.builtin.debug:
+    msg: >-
+      RESTORE PROVEN: repo integrity OK, latest snapshot restored,
+      {{ restore_drill_expected_artifacts | length }} artifact(s) verified non-empty.

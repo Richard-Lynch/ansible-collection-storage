@@ -1,0 +1,27 @@
+---
+# Pre-flight validation for the requested snapshot policy. Split out so molecule can exercise it
+# without any API contact.
+
+- name: Assert every naming_schema carries the middleware-required time tokens
+  ansible.builtin.assert:
+    that:
+      - item.naming_schema is search('%Y')
+      - item.naming_schema is search('%m')
+      - item.naming_schema is search('%d')
+      - item.naming_schema is search('%H')
+      - item.naming_schema is search('%M')
+    fail_msg: "naming_schema '{{ item.naming_schema }}' must contain %Y %m %d %H %M (TrueNAS requires it)."
+    quiet: true
+  loop: "{{ truenas_snapshot_tasks }}"
+  loop_control:
+    label: "{{ item.dataset }} / {{ item.naming_schema }}"
+
+- name: Assert lifetime_unit is one the middleware accepts
+  ansible.builtin.assert:
+    that:
+      - item.lifetime_unit in ['HOUR', 'DAY', 'WEEK', 'MONTH', 'YEAR']
+    fail_msg: "lifetime_unit '{{ item.lifetime_unit }}' invalid (must be HOUR/DAY/WEEK/MONTH/YEAR)."
+    quiet: true
+  loop: "{{ truenas_snapshot_tasks }}"
+  loop_control:
+    label: "{{ item.dataset }} / {{ item.lifetime_unit }}"

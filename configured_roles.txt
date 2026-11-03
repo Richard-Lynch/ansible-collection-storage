@@ -1,0 +1,7 @@
+backup_restore_drill
+iscsi_mount_units
+restic_backup
+truenas_config_backup
+truenas_exporter
+truenas_snapshot_tasks
+truenas_storage

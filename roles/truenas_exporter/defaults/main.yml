@@ -1,0 +1,20 @@
+---
+# Where TrueNAS is, e.g. https://<appliance address>. REQUIRED, no default (meta/argument_specs.py):
+# the appliance address is the caller's. HTTPS because its API speaks nothing else — see the TLS
+# note in the script.
+
+# The API key. NEVER defaulted to a literal: an exporter that starts with an empty key would serve
+# truenas_up 0 forever and look like a TrueNAS outage rather than a missing credential. The role
+# asserts it was supplied.
+truenas_exporter_api_key: ""
+
+# Port the exporter listens on. 9108 sits outside node_exporter's 9100; change it if it is taken.
+truenas_exporter_port: 9108
+
+# Verify TrueNAS's TLS certificate. FALSE because the appliance serves a self-signed cert by
+# default and this exporter is meant for an internal hop. Flip to true once a trusted cert is in
+# place — the code path already exists rather than being a future rewrite.
+truenas_exporter_verify_tls: false
+
+# Report-only by default (generate-don't-apply): set true to install and start the service.
+truenas_exporter_apply: false

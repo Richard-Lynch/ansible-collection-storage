@@ -1,0 +1,16 @@
+# Offline test: stub exported-artefact fixtures and exercise the SAME size/type-guard assertions the
+# role uses, in both directions (good passes, known-bad-shapes fail) — no midclt/appliance contact.
+---
+dependency: { name: galaxy }
+driver: { name: default }
+platforms: [{ name: localhost }]
+provisioner:
+  name: ansible
+  # Dependencies (galaxy.yml) are installed into collections.galaxy/ at the repo root; the
+  # second entry resolves this collection itself when the checkout sits at
+  # ansible_collections/richard_lynch/storage. molecule does not read a repo ansible.cfg.
+  env:
+    ANSIBLE_COLLECTIONS_PATH: "${MOLECULE_PROJECT_DIRECTORY}/../../collections.galaxy:${MOLECULE_PROJECT_DIRECTORY}/../../../../.."
+  inventory: { host_vars: { localhost: { ansible_connection: local } } }
+  playbooks: { converge: converge.yml, verify: verify.yml }
+verifier: { name: ansible }

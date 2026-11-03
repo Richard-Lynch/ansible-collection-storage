@@ -1,0 +1,34 @@
+---
+# AUTO-GENERATED defaults file — DO NOT EDIT.
+#
+# Source of truth: roles/truenas_storage/meta/argument_specs.py
+# Regenerate:      venv/bin/python tools/argspec/cli.py x generate truenas_storage
+#
+# Edits here are silently overwritten on the next generation. To change a value or its
+# documentation, change the OptionSpec in the source file above — descriptions there
+# are emitted as the comments in this file.
+# Entrypoint:      main
+
+# API user. The default is the administrative account TrueNAS SCALE creates at install.
+truenas_storage_api_user__default: truenas_admin
+
+# TrueNAS presents a self-signed certificate by default.
+truenas_storage_validate_certs__default: false
+
+# Zvols to reconcile. Only `volsize` is managed, and only upwards.
+truenas_storage_zvols__default: []
+
+# Filesystem datasets to create if absent.
+truenas_storage_datasets__default: []
+
+# Datasets or zvols to DESTROY, recursively (snapshots included). Irreversible.
+# Every entry must carry `confirm: yes` AND the exact `expect_used_gb` the role reads back from the appliance, so a typo or a stale plan cannot delete the wrong thing or a thing that has since changed.
+# The role additionally refuses if the target is referenced by an iSCSI extent, an NFS or SMB share, or a replication task, or if it has been written to since its last snapshot.
+truenas_storage_destroy__default: []
+
+# Refuse to grow a zvol if its pool is already fuller than this percentage. ZFS performance degrades sharply past ~80% and a full pool is very hard to recover from.
+truenas_storage_pool_ceiling__default: 80
+
+# When false (default) the role reports the computed diff and changes nothing.
+# Set true to actually resize/create. Storage changes are hard to undo — run once with false and read the diff first.
+truenas_storage_apply__default: false

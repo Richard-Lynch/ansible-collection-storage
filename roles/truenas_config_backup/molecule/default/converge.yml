@@ -1,0 +1,39 @@
+---
+# Build stub "exported artefact" fixtures that stand in for a real TrueNAS config.save export. No
+# midclt/appliance contact — verify.yml exercises the SAME size/type-guard logic the role uses
+# (roles/truenas_config_backup/tasks/main.yml) against these fixtures, in both directions.
+- name: Converge
+  hosts: localhost
+  gather_facts: false
+  vars:
+    stub_dir: /tmp/molecule-truenas-config-backup
+  tasks:
+    - name: Ensure the stub dir exists
+      ansible.builtin.file:
+        path: "{{ stub_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Write the source file the GOOD archive will compress (well over the 100KB floor)
+      ansible.builtin.copy:
+        dest: "{{ stub_dir }}/good-source.txt"
+        content: "{{ 'truenas-config-backup-fixture\n' * 20000 }}"
+        mode: "0644"
+
+    - name: Build a stub GOOD artefact (a real tar archive, over the 100KB floor)
+      community.general.archive:
+        path: "{{ stub_dir }}/good-source.txt"
+        dest: "{{ stub_dir }}/good.tar"
+        format: tar
+
+    - name: Write a stub BAD artefact (a tiny 2048-byte file that looks like a backup)
+      ansible.builtin.copy:
+        dest: "{{ stub_dir }}/bad-tiny.tar"
+        content: "{{ 'x' * 2048 }}"
+        mode: "0644"
+
+    - name: Write a stub artefact that is big enough but the WRONG type (not tar/SQLite)
+      ansible.builtin.copy:
+        dest: "{{ stub_dir }}/bad-wrongtype.tar"
+        content: "{{ '<html>not a backup, an error page</html>\n' * 5000 }}"
+        mode: "0644"

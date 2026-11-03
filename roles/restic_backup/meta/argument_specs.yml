@@ -1,0 +1,96 @@
+---
+# AUTO-GENERATED argument spec — DO NOT EDIT.
+#
+# Source of truth: roles/restic_backup/meta/argument_specs.py
+# Regenerate:      venv/bin/python tools/argspec/cli.py x generate restic_backup
+#
+# Edits here are silently overwritten on the next generation. To change a value or its
+# documentation, change the OptionSpec in the source file above — descriptions there
+# are emitted as the comments in this file.
+argument_specs:
+  main:
+    short_description: restic backup of host state to Object-Locked B2
+    version_added: '1.0'
+    author: Collection maintainers
+    options:
+      restic_backup_version:
+        description:
+          - restic release to install.
+        type: str
+        required: false
+      restic_backup_b2_bucket:
+        description:
+          - B2 bucket (Object Lock).
+        type: str
+        required: true
+      restic_backup_repo:
+        description:
+          - restic repo URL (b2:bucket:path).
+        type: str
+        required: false
+      restic_backup_b2_key_id:
+        description:
+          - B2 key id (resolve it from a secret store).
+        type: str
+        required: true
+        no_log: true
+      restic_backup_b2_app_key:
+        description:
+          - B2 app key, a no-delete key (resolve it from a secret store).
+        type: str
+        required: true
+        no_log: true
+      restic_backup_password:
+        description:
+          - restic repo password (resolve it from a secret store).
+        type: str
+        required: true
+        no_log: true
+      restic_backup_paths:
+        description:
+          - Static paths to back up.
+        type: list
+        required: false
+        elements: str
+      restic_backup_dumps:
+        description:
+          - Pre-backup dump commands ({name, cmd}).
+        type: list
+        required: false
+        elements: dict
+      restic_backup_dump_dir:
+        description:
+          - Dir the dumps write to (backed up).
+        type: str
+        required: false
+      restic_backup_oncalendar:
+        description:
+          - systemd OnCalendar schedule.
+        type: str
+        required: false
+      restic_backup_keep_daily:
+        description:
+          - 'Retention: keep-daily.'
+        type: int
+        required: false
+      restic_backup_keep_weekly:
+        description:
+          - 'Retention: keep-weekly.'
+        type: int
+        required: false
+      restic_backup_keep_monthly:
+        description:
+          - 'Retention: keep-monthly.'
+        type: int
+        required: false
+      restic_backup_healthcheck_url:
+        description:
+          - Dead-man switch ping URL.
+        type: str
+        required: false
+      restic_backup_run_now:
+        description:
+          - Run a backup during the play.
+        type: bool
+        required: false
+        default: false

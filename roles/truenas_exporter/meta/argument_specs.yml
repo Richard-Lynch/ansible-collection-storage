@@ -1,0 +1,44 @@
+---
+# AUTO-GENERATED argument spec — DO NOT EDIT.
+#
+# Source of truth: roles/truenas_exporter/meta/argument_specs.py
+# Regenerate:      venv/bin/python tools/argspec/cli.py x generate truenas_exporter
+#
+# Edits here are silently overwritten on the next generation. To change a value or its
+# documentation, change the OptionSpec in the source file above — descriptions there
+# are emitted as the comments in this file.
+argument_specs:
+  main:
+    short_description: Off-box Prometheus exporter for TrueNAS pool health
+    version_added: '1.0'
+    author: Collection maintainers
+    options:
+      truenas_exporter_url:
+        description:
+          - "The appliance's API base URL, https://<address>. No default: the address"
+          - is the caller's inventory configuration.
+        type: str
+        required: true
+      truenas_exporter_api_key:
+        description:
+          - A TrueNAS API key (resolve it from a secret store). The role refuses to
+          - 'deploy with an empty or implausibly short key: an exporter started without'
+          - one serves truenas_up 0 forever, which reads as an appliance outage.
+        type: str
+        required: false
+        no_log: true
+      truenas_exporter_port:
+        description:
+          - Port the exporter listens on.
+        type: int
+        required: false
+      truenas_exporter_verify_tls:
+        description:
+          - Verify the appliance's TLS certificate (false for a self-signed one).
+        type: bool
+        required: false
+      truenas_exporter_apply:
+        description:
+          - Deploy. False (the default) only reports what would be deployed.
+        type: bool
+        required: false

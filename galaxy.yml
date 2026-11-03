@@ -1,0 +1,39 @@
+# Copyright: (c) 2026, Richard Lynch
+# GNU General Public License v3.0+ (see https://www.gnu.org/licenses/gpl-3.0.txt)
+# SPDX-License-Identifier: GPL-3.0-or-later
+---
+namespace: richard_lynch
+name: storage
+version: 1.0.0
+readme: README.md
+authors:
+  - Richard Lynch
+description: >-
+  Storage and backup roles: TrueNAS zvols, datasets, periodic snapshot tasks and config backups through the appliance's API, an off-box TrueNAS pool-health exporter, systemd units that order an iSCSI login before its mount, and restic backups to Object-Locked B2 with a restore drill.
+license:
+  - GPL-3.0-or-later
+tags:
+  - storage
+  - backup
+  - infrastructure
+  - linux
+dependencies:
+  community.general: ">=9.0.0"
+repository: https://github.com/Richard-Lynch/ansible-collection-storage
+documentation: https://github.com/Richard-Lynch/ansible-collection-storage/blob/main/README.md
+homepage: https://github.com/Richard-Lynch/ansible-collection-storage
+issues: https://github.com/Richard-Lynch/ansible-collection-storage/issues
+build_ignore:
+  - .ansible-lint
+  - configured_roles.txt
+  - roles/*/defaults/SKIP
+  - .github
+  - .gitignore
+  - collections.galaxy
+  - devkit.toml
+  - dist
+  - export.manifest
+  - tests/output
+  - roles/*/meta/argument_specs.py
+  - roles/*/molecule
+  - "*.tar.gz"

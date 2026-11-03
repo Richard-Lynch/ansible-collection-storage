@@ -1,0 +1,24 @@
+---
+- name: Verify the ransomware-safety invariants in the rendered script
+  hosts: localhost
+  gather_facts: false
+  vars: { render_dir: /tmp/molecule-restic }
+  tasks:
+    - name: Read the rendered script
+      ansible.builtin.slurp: { src: "{{ render_dir }}/restic-backup.sh" }
+      register: _s
+    - name: Decode
+      ansible.builtin.set_fact:
+        script: "{{ _s.content | b64decode }}"
+    - name: Uses forget (retention) but NEVER prune (no delete key on this host)
+      ansible.builtin.assert:
+        that:
+          - "'restic forget' in script"
+          - "'restic prune' not in script"
+          - "'restic backup' in script"
+          - "'app.db' in script"          # the dump ran
+          - "'/var/backups/restic-dumps' in script"   # dump dir is backed up
+        fail_msg: "restic script missing a safety invariant (forget-not-prune / dump / dump-dir)."
+        success_msg: "ransomware-safety invariants OK (forget-not-prune, dumps included)."
+    - name: Clean up
+      ansible.builtin.file: { path: "{{ render_dir }}", state: absent }

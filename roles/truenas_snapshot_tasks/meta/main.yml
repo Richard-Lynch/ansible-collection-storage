@@ -1,0 +1,16 @@
+---
+galaxy_info:
+  role_name: truenas_snapshot_tasks
+  namespace: richard_lynch
+  author: Richard Lynch
+  description: >-
+    Reconcile TrueNAS SCALE periodic ZFS snapshot tasks via midclt on the appliance, so a
+    recurring-snapshot policy is declared in code. Idempotent + additive.
+  license: GPL-3.0-or-later
+  min_ansible_version: "2.15"
+  galaxy_tags:
+    - truenas
+    - zfs
+    - snapshots
+    - backup
+dependencies: []

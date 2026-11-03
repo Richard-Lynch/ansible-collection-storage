@@ -1,0 +1,26 @@
+---
+- name: Converge — render the backup script only (no B2 contact)
+  hosts: localhost
+  gather_facts: false
+  vars_files: ["{{ playbook_dir }}/../../defaults/main.yml"]
+  vars:
+    render_dir: /tmp/molecule-restic
+    inventory_hostname: testhost
+  tasks:
+    - name: Override creds + dumps for the render
+      ansible.builtin.set_fact:
+        restic_backup_b2_bucket: "test-bucket"
+        restic_backup_b2_key_id: "TEST_KEY_ID"
+        restic_backup_b2_app_key: "TEST_APP_KEY"
+        restic_backup_password: "TEST_PW"
+        restic_backup_paths: ["/opt", "/etc/app"]
+        restic_backup_dumps:
+          - { name: app, cmd: 'sqlite3 /config/app.db ".backup {{ restic_backup_dump_dir }}/app.db"' }
+        restic_backup_healthcheck_url: "https://hc.example/ping/xyz"
+    - name: Make render dir
+      ansible.builtin.file: { path: "{{ render_dir }}", state: directory, mode: "0755" }
+    - name: Render the backup script
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../../templates/restic-backup.sh.j2"
+        dest: "{{ render_dir }}/restic-backup.sh"
+        mode: "0700"

@@ -1,0 +1,51 @@
+---
+# AUTO-GENERATED defaults resolver — DO NOT EDIT.
+#
+# Source of truth: roles/truenas_config_backup/meta/argument_specs.py
+# Regenerate:      venv/bin/python tools/argspec/cli.py x generate truenas_config_backup
+#
+# Edits here are silently overwritten on the next generation. To change a value or its
+# documentation, change the OptionSpec in the source file above — descriptions there
+# are emitted as the comments in this file.
+
+# Binds every declared option to its generated default, so a caller-supplied value
+# wins and an unsupplied one falls back rather than evaluating Undefined.
+#
+# Include this FIRST from every entrypoint:
+#   - ansible.builtin.include_tasks: _resolve_defaults.yml
+#
+# Role-specific setup logic belongs in tasks/setup_vars.yml, NOT here — this file is
+# overwritten on every generation.
+#
+# TWO BRANCHES, because `set_fact` persists for the whole play. A role invoked twice in
+# one play would otherwise see its OWN leftover facts on the second call, so a later
+# caller that omitted an option silently inherited the earlier caller's value instead of
+# the declared default. On a repeat call this ignores the role's own facts and rebinds
+# the defaults; an include-level `vars:` shadows the fact, so a value the caller DID
+# supply this time still wins. Roles called once per play only ever run the first branch.
+
+- name: Resolve declared options over their generated defaults
+  ansible.builtin.set_fact:
+    truenas_config_backup_remote_dir: "{{ truenas_config_backup_remote_dir | default(truenas_config_backup_remote_dir__default) if truenas_config_backup_remote_dir__default is defined else truenas_config_backup_remote_dir | default(omit) }}"
+    truenas_config_backup_secretseed: "{{ truenas_config_backup_secretseed | default(truenas_config_backup_secretseed__default) if truenas_config_backup_secretseed__default is defined else truenas_config_backup_secretseed | default(omit) }}"
+    truenas_config_backup_root_authorized_keys: "{{ truenas_config_backup_root_authorized_keys | default(truenas_config_backup_root_authorized_keys__default) if truenas_config_backup_root_authorized_keys__default is defined else truenas_config_backup_root_authorized_keys | default(omit) }}"
+    truenas_config_backup_local_staging_dir: "{{ truenas_config_backup_local_staging_dir | default(truenas_config_backup_local_staging_dir__default) if truenas_config_backup_local_staging_dir__default is defined else truenas_config_backup_local_staging_dir | default(omit) }}"
+    truenas_config_backup_min_size_bytes: "{{ truenas_config_backup_min_size_bytes | default(truenas_config_backup_min_size_bytes__default) if truenas_config_backup_min_size_bytes__default is defined else truenas_config_backup_min_size_bytes | default(omit) }}"
+    truenas_config_backup_fallback_to_raw_db: "{{ truenas_config_backup_fallback_to_raw_db | default(truenas_config_backup_fallback_to_raw_db__default) if truenas_config_backup_fallback_to_raw_db__default is defined else truenas_config_backup_fallback_to_raw_db | default(omit) }}"
+    truenas_config_backup_apply: "{{ truenas_config_backup_apply | default(truenas_config_backup_apply__default) if truenas_config_backup_apply__default is defined else truenas_config_backup_apply | default(omit) }}"
+  when: not (_truenas_config_backup__argspec_resolved | default(false))
+
+- name: Rebind the defaults on a repeat call, ignoring this role's own leftover facts
+  ansible.builtin.set_fact:
+    truenas_config_backup_remote_dir: "{{ truenas_config_backup_remote_dir__default if truenas_config_backup_remote_dir__default is defined else truenas_config_backup_remote_dir | default(omit) }}"
+    truenas_config_backup_secretseed: "{{ truenas_config_backup_secretseed__default if truenas_config_backup_secretseed__default is defined else truenas_config_backup_secretseed | default(omit) }}"
+    truenas_config_backup_root_authorized_keys: "{{ truenas_config_backup_root_authorized_keys__default if truenas_config_backup_root_authorized_keys__default is defined else truenas_config_backup_root_authorized_keys | default(omit) }}"
+    truenas_config_backup_local_staging_dir: "{{ truenas_config_backup_local_staging_dir__default if truenas_config_backup_local_staging_dir__default is defined else truenas_config_backup_local_staging_dir | default(omit) }}"
+    truenas_config_backup_min_size_bytes: "{{ truenas_config_backup_min_size_bytes__default if truenas_config_backup_min_size_bytes__default is defined else truenas_config_backup_min_size_bytes | default(omit) }}"
+    truenas_config_backup_fallback_to_raw_db: "{{ truenas_config_backup_fallback_to_raw_db__default if truenas_config_backup_fallback_to_raw_db__default is defined else truenas_config_backup_fallback_to_raw_db | default(omit) }}"
+    truenas_config_backup_apply: "{{ truenas_config_backup_apply__default if truenas_config_backup_apply__default is defined else truenas_config_backup_apply | default(omit) }}"
+  when: _truenas_config_backup__argspec_resolved | default(false)
+
+- name: Record that this role has resolved its options in this play
+  ansible.builtin.set_fact:
+    _truenas_config_backup__argspec_resolved: true

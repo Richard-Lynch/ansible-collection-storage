@@ -1,0 +1,22 @@
+---
+# truenas_snapshot_tasks — create/reconcile TrueNAS SCALE periodic ZFS snapshot tasks through the
+# appliance middleware (`midclt`), so the recurring-snapshot policy is declared in code rather than
+# clicked in the UI. ZFS snapshots are Copy-2 (local, cheap, instant) of the
+# 3-2-1 backup model — they protect against fat-finger deletes + are the source for restic/replication.
+#
+# Idempotent: the role lists existing snapshottasks and only creates ones that don't already exist
+# (matched on naming_schema, which is unique per policy tier). It NEVER deletes tasks it didn't create.
+#
+# Runs ON the appliance via `midclt call pool.snapshottask.*`. No API key needed — midclt authenticates
+# locally as root. sanoid-inside-the-appliance is NOT idiomatic; SCALE owns snapshot scheduling.
+
+# --- the snapshot policy (per-dataset tasks) ---
+# REQUIRED, no default: which datasets to snapshot is the caller's inventory configuration (pool names
+# differ on every appliance), so it is declared in inventory, never here. A tiered policy is
+# hourly short-lived + daily + weekly, applied recursively to each pool root. naming_schema MUST
+# contain %Y %m %d %H %M (middleware enforces this) and must be unique per tier so the reconcile
+# match is stable. See README.md for an example.
+
+# Safety: default false = build/reconcile the tasks but leave newly-created ones DISABLED so the
+# operator can review the policy in the UI before it starts taking snapshots. Set true to enable on create.
+truenas_snapshot_enabled_on_create: false

@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# Managed by restic_backup. Nightly backup of this host's critical small state to Object-Locked B2.
+# DBs are dumped (not copied live); this host's B2 key is append-only (cannot delete). Pruning is
+# done elsewhere with a separate delete-capable key.
+set -euo pipefail
+
+export RESTIC_REPOSITORY="{{ restic_backup_repo }}"
+export RESTIC_PASSWORD="{{ restic_backup_password }}"
+export B2_ACCOUNT_ID="{{ restic_backup_b2_key_id }}"
+export B2_ACCOUNT_KEY="{{ restic_backup_b2_app_key }}"
+
+DUMP_DIR="{{ restic_backup_dump_dir }}"
+mkdir -p "$DUMP_DIR"
+
+log() { echo "[restic-backup] $*"; }
+
+# --- pre-backup dumps (DBs dumped to $DUMP_DIR, which is then backed up) ---
+{% for d in restic_backup_dumps %}
+log "dump: {{ d.name }}"
+{{ d.cmd }}
+{% endfor %}
+
+# --- ensure the repo is initialized (idempotent) ---
+if ! restic snapshots >/dev/null 2>&1; then
+  log "initializing repo {{ restic_backup_repo }}"
+  restic init
+fi
+
+# --- the backup ---
+log "backing up"
+restic backup \
+  --host "{{ inventory_hostname }}" \
+  --tag "automated" \
+{% for p in restic_backup_paths %}
+  "{{ p }}" \
+{% endfor %}
+  "$DUMP_DIR"
+
+# --- retention (forget only — PRUNE is done elsewhere with a delete-capable key) ---
+log "applying retention (forget, no prune)"
+restic forget \
+  --keep-daily {{ restic_backup_keep_daily }} \
+  --keep-weekly {{ restic_backup_keep_weekly }} \
+  --keep-monthly {{ restic_backup_keep_monthly }}
+
+{% if restic_backup_healthcheck_url %}
+# --- dead-man switch: ping on success ---
+curl -fsS -m 10 --retry 3 "{{ restic_backup_healthcheck_url }}" >/dev/null || log "warn: healthcheck ping failed"
+{% endif %}
+
+log "done"

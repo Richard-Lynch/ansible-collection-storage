@@ -1,0 +1,20 @@
+---
+# Build a stub "restored" tree that stands in for a real restored snapshot. No restic/B2/appliance
+# contact. Idempotent (fixed-content copy) so molecule's idempotence check passes. verify.yml does the
+# stat + assert (the heart of the role) against this fixture.
+- name: Converge
+  hosts: localhost
+  gather_facts: false
+  vars:
+    stub_target: /tmp/molecule-restore-drill
+  tasks:
+    - name: Ensure the stub dumps dir exists
+      ansible.builtin.file:
+        path: "{{ stub_target }}/dumps"
+        state: directory
+        mode: "0755"
+    - name: Write a non-empty "restored" artifact (fixed content → idempotent)
+      ansible.builtin.copy:
+        dest: "{{ stub_target }}/dumps/app.db"
+        content: "restored-db-contents\n"
+        mode: "0644"

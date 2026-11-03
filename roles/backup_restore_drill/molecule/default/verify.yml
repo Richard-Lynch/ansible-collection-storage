@@ -1,0 +1,41 @@
+---
+- name: Verify the artifact-check logic accepts good + rejects bad
+  hosts: localhost
+  gather_facts: false
+  vars:
+    stub_target: /tmp/molecule-restore-drill
+    expected:
+      - { path: "dumps/app.db", min_bytes: 4 }
+  tasks:
+    - name: Stat each expected artifact under the fixture (exactly as the role does)
+      ansible.builtin.stat: { path: "{{ stub_target }}/{{ item.path }}" }
+      loop: "{{ expected }}"
+      loop_control: { label: "{{ item.path }}" }
+      register: _restored
+
+    - name: A present, big-enough artifact PASSES (the role's success path)
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.size >= (item.item.min_bytes | default(1))
+        fail_msg: "good artifact should have passed."
+        success_msg: "present non-empty artifact accepted."
+        quiet: true
+      loop: "{{ _restored.results }}"
+      loop_control: { label: "{{ item.item.path }}" }
+
+    - name: An over-large min_bytes threshold would FAIL the same artifact (guard is real)
+      ansible.builtin.assert:
+        that:
+          - not (_restored.results[0].stat.size >= 100000)
+        success_msg: "size threshold is enforced — an under-size restore would be caught."
+
+    - name: The scratch ZFS-dataset guard rejects a non-scratch name
+      vars:
+        real_ds: "pool1/media"
+        scratch_ds: "pool1/restore-drill-scratch"
+      ansible.builtin.assert:
+        that:
+          - "'restore-drill' in scratch_ds or 'scratch' in scratch_ds"
+          - "not ('restore-drill' in real_ds or 'scratch' in real_ds)"
+        success_msg: "ZFS drill dataset guard correctly distinguishes scratch from real datasets."

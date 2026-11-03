@@ -1,0 +1,72 @@
+---
+# ZFS snapshot rollback drill on a THROWAWAY dataset (via midclt, on the appliance). Writes a marker,
+# snapshots, deletes the marker, rolls back, asserts the marker returned. Proves snapshot rollback
+# actually recovers data. NEVER point restore_drill_zfs_dataset at a real dataset.
+
+- name: Assert the drill dataset is a scratch path (guard against a real dataset)
+  ansible.builtin.assert:
+    that:
+      - (restore_drill_zfs_dataset | default('') | length) > 0
+      - "'restore-drill' in restore_drill_zfs_dataset or 'scratch' in restore_drill_zfs_dataset"
+    fail_msg: >-
+      restore_drill_zfs_dataset must be set (it has no default: the pool is the caller's) and must
+      be a throwaway (name must contain 'restore-drill'/'scratch').
+    quiet: true
+
+- name: Ensure the throwaway dataset exists
+  ansible.builtin.command: >
+    midclt call pool.dataset.create '{{ {"name": restore_drill_zfs_dataset, "type": "FILESYSTEM"} | to_json }}'
+  register: _ds_create
+  changed_when: "'error' not in (_ds_create.stderr | default(''))"
+  failed_when:
+    - _ds_create.rc != 0
+    - "'already exists' not in (_ds_create.stderr | default(''))"
+
+- name: Find the dataset mountpoint
+  ansible.builtin.command: >
+    midclt call pool.dataset.query '[["name", "=", "{{ restore_drill_zfs_dataset }}"]]'
+  register: _ds_q
+  changed_when: false
+
+- name: Set the marker path
+  ansible.builtin.set_fact:
+    _drill_mount: "{{ (_ds_q.stdout | from_json)[0].mountpoint }}"
+    _drill_snap: "{{ restore_drill_zfs_dataset }}@restore-drill"
+
+- name: Write a known marker
+  ansible.builtin.copy:
+    dest: "{{ _drill_mount }}/DRILL_MARKER"
+    content: "restore-drill marker\n"
+    mode: "0644"
+
+- name: Snapshot the dataset (replace any prior drill snapshot)
+  ansible.builtin.command: >
+    midclt call zfs.snapshot.create '{{ {"dataset": restore_drill_zfs_dataset, "name": "restore-drill"} | to_json }}'
+  register: _snap
+  changed_when: true
+  failed_when:
+    - _snap.rc != 0
+    - "'already exists' not in (_snap.stderr | default(''))"
+
+- name: Delete the marker (simulate data loss)
+  ansible.builtin.file:
+    path: "{{ _drill_mount }}/DRILL_MARKER"
+    state: absent
+
+- name: Roll back to the snapshot
+  ansible.builtin.command: >
+    midclt call zfs.snapshot.rollback '{{ _drill_snap | to_json }}'
+  changed_when: true
+
+- name: Assert the marker returned after rollback
+  ansible.builtin.stat:
+    path: "{{ _drill_mount }}/DRILL_MARKER"
+  register: _marker
+
+- name: Fail if the rollback did not recover the marker
+  ansible.builtin.assert:
+    that:
+      - _marker.stat.exists
+    fail_msg: "ZFS rollback drill FAILED: marker not recovered after rollback."
+    success_msg: "ZFS rollback proven — marker recovered after snapshot rollback."
+    quiet: true

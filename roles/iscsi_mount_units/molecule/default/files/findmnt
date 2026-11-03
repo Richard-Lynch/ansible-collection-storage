@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Fake findmnt: /mnt/media NOT mounted, as after a boot where the mount skipped itself.
+exit 1

@@ -1,0 +1,87 @@
+---
+# restic_backup — install restic + a systemd-timed backup to Object-Locked B2. Idempotent. The play
+# NEVER runs a backup unless restic_backup_run_now=true (default false).
+
+- name: Assert B2 credentials are available (the bucket + key must be provisioned first)
+  ansible.builtin.assert:
+    that:
+      - restic_backup_b2_key_id | length > 0
+      - restic_backup_b2_app_key | length > 0
+      - restic_backup_password | length > 0
+    fail_msg: >-
+      restic B2 credentials are empty. Create the B2 bucket (Object Lock) and a no-delete app key,
+      store the key id, app key and repo password in your secret store, and pass them as
+      restic_backup_b2_key_id, restic_backup_b2_app_key and restic_backup_password.
+
+- name: Install restic
+  ansible.builtin.get_url:
+    url: "https://github.com/restic/restic/releases/download/v{{ restic_backup_version }}/restic_{{ restic_backup_version }}_linux_amd64.bz2"
+    dest: "/tmp/restic-{{ restic_backup_version }}.bz2"
+    mode: "0644"
+
+- name: Unpack restic binary
+  ansible.builtin.shell: "bunzip2 -kf /tmp/restic-{{ restic_backup_version }}.bz2 && install -m0755 /tmp/restic-{{ restic_backup_version }} /usr/local/bin/restic"
+  args:
+    creates: /usr/local/bin/restic
+
+- name: Ensure the dump dir exists (root-only — may hold DB dumps)
+  ansible.builtin.file:
+    path: "{{ restic_backup_dump_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Install the backup script (holds B2 creds — root-only)
+  ansible.builtin.template:
+    src: restic-backup.sh.j2
+    dest: /usr/local/sbin/restic-backup.sh
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Install the systemd service
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/restic-backup.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=restic backup to Object-Locked B2
+      Wants=network-online.target
+      After=network-online.target
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/sbin/restic-backup.sh
+      Nice=10
+      IOSchedulingClass=idle
+
+- name: Install the systemd timer
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/restic-backup.timer
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Nightly restic backup
+
+      [Timer]
+      OnCalendar={{ restic_backup_oncalendar }}
+      Persistent=true
+      RandomizedDelaySec=600
+
+      [Install]
+      WantedBy=timers.target
+  notify: Reload systemd
+
+- name: Enable the backup timer
+  ansible.builtin.systemd:
+    name: restic-backup.timer
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Run a backup now (only when explicitly requested)
+  ansible.builtin.command: /usr/local/sbin/restic-backup.sh
+  register: _first_backup
+  changed_when: true
+  when: restic_backup_run_now | bool

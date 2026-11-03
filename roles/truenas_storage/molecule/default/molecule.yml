@@ -1,0 +1,21 @@
+# Offline scenario — exercises the grow-only/shrink-refusal/pool-ceiling logic against fixtures,
+# with no TrueNAS appliance and no network. The API-facing tasks are not run; what matters is that
+# the decision logic is correct, because getting it wrong destroys data.
+---
+dependency:
+  name: galaxy
+driver:
+  name: default
+platforms:
+  - name: localhost
+provisioner:
+  name: ansible
+  inventory:
+    host_vars:
+      localhost:
+        ansible_connection: local
+  playbooks:
+    converge: converge.yml
+    verify: verify.yml
+verifier:
+  name: ansible

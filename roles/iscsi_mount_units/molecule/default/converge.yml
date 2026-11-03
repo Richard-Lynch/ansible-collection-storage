@@ -1,0 +1,157 @@
+---
+# Runs the REAL role against fixture units carrying all three defects (D1-D3).
+
+- name: Converge — the real role against broken fixture units
+  hosts: localhost
+  gather_facts: true
+  # Play-level: `environment:` is not valid on include_role.
+  environment:
+    PATH: "/tmp/molecule-iscsi-units/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+  vars:
+    fake_root: /tmp/molecule-iscsi-units
+  tasks:
+    - name: Reset the scratch tree
+      ansible.builtin.file: { path: "{{ fake_root }}", state: absent }
+
+    - name: Create the scratch dirs
+      ansible.builtin.file:
+        path: "{{ fake_root }}/{{ item }}"
+        state: directory
+        mode: "0755"
+      loop: [bin, "etc/systemd/system", stage]
+
+    - name: Install the fake tools
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/files/{{ item }}"
+        dest: "{{ fake_root }}/bin/{{ item }}"
+        mode: "0755"
+      loop: [systemctl, systemd-analyze, iscsiadm, findmnt, pct, md5sum]
+
+    - name: Confirm the fakes actually shadow the real tools
+      # A PATH override that silently fails leaves assertions passing against the real system, so it
+      # is checked explicitly rather than assumed.
+      # `shell`, NOT `command`: `command -v` is a SHELL BUILTIN, so the command module looks for an
+      # executable literally named `command`, which only some platforms ship as /usr/bin/command.
+      ansible.builtin.shell:
+        cmd: command -v systemctl
+      register: _which
+      changed_when: false
+
+    - name: Assert the shadowing took effect
+      ansible.builtin.assert:
+        that:
+          - _which.stdout | trim == fake_root ~ '/bin/systemctl'
+        fail_msg: "PATH override did not take effect — resolved '{{ _which.stdout | trim }}'."
+        quiet: true
+
+    # --- broken units carrying all three defects -----------------------------------------------------
+    - name: Stage the broken login unit (defects D1 and D2)
+      # Includes `Requires=pvevm@100.service` — a unit that does not exist on current PVE and makes
+      # the login impossible to restart by hand.
+      ansible.builtin.copy:
+        dest: "{{ fake_root }}/etc/systemd/system/iscsi-login@iqn.2005-10.org.freenas.ctl_media.service"
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Login iSCSI target iqn.2005-10.org.freenas.ctl:media after the storage VM is running
+          Wants=network-online.target
+          After=network-online.target pvevm@100.service
+          Requires=pvevm@100.service
+
+          [Service]
+          Type=oneshot
+          ExecStart=/sbin/iscsiadm -m node -T iqn.2005-10.org.freenas.ctl:media -p 192.0.2.10:3260 --login
+          RemainAfterExit=yes
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Stage the broken mount unit (defect D3)
+      # Includes the ConditionPathExists on the iSCSI device — the silent guard that made the mount
+      # skip itself on every cold boot while reporting success.
+      ansible.builtin.copy:
+        dest: "{{ fake_root }}/etc/systemd/system/mnt-media.mount"
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Mount iqn.2005-10.org.freenas.ctl:media at /mnt/media
+          Wants=iscsi-login@iqn.2005-10.org.freenas.ctl_media.service
+          After=network-online.target
+          Requires=network-online.target
+          ConditionPathExists=/dev/disk/by-path/ip-192.0.2.10:3260-iscsi-iqn.2005-10.org.freenas.ctl:media-lun-0
+
+          [Mount]
+          What=/dev/disk/by-path/ip-192.0.2.10:3260-iscsi-iqn.2005-10.org.freenas.ctl:media-lun-0
+          Where=/mnt/media
+          Type=ext4
+          Options=defaults,_netdev,noatime,discard
+
+          [Install]
+          WantedBy=multi-user.target
+
+    # --- run 1: DRY RUN — must not modify the live units ------------------------------------------
+    - name: Run the role in dry-run mode
+      ansible.builtin.include_role:
+        name: iscsi_mount_units
+      vars:
+        iscsi_units_target_iqn: "iqn.2005-10.org.freenas.ctl:media"
+        iscsi_units_portal_host: "192.0.2.10"
+        iscsi_units_mount_path: "/mnt/media"
+        iscsi_units_guest_ctid: 101
+        iscsi_units_apply: false
+        iscsi_units_stage_dir: "{{ fake_root }}/stage"
+        iscsi_units_systemd_dir: "{{ fake_root }}/etc/systemd/system"
+
+    - name: Capture the units after the dry run
+      ansible.builtin.slurp:
+        src: "{{ fake_root }}/etc/systemd/system/{{ item }}"
+      loop:
+        - "iscsi-login@iqn.2005-10.org.freenas.ctl_media.service"
+        - "mnt-media.mount"
+      register: _after_dry
+
+    # --- run 2: APPLY ------------------------------------------------------------------------------
+    - name: Run the role with apply
+      ansible.builtin.include_role:
+        name: iscsi_mount_units
+      vars:
+        iscsi_units_target_iqn: "iqn.2005-10.org.freenas.ctl:media"
+        iscsi_units_portal_host: "192.0.2.10"
+        iscsi_units_mount_path: "/mnt/media"
+        iscsi_units_guest_ctid: 101
+        iscsi_units_apply: true
+        iscsi_units_stage_dir: "{{ fake_root }}/stage"
+        iscsi_units_systemd_dir: "{{ fake_root }}/etc/systemd/system"
+
+    - name: Capture the units after apply
+      ansible.builtin.slurp:
+        src: "{{ fake_root }}/etc/systemd/system/{{ item }}"
+      loop:
+        - "iscsi-login@iqn.2005-10.org.freenas.ctl_media.service"
+        - "mnt-media.mount"
+      register: _after_apply
+
+    - name: Find the backups
+      ansible.builtin.find:
+        paths: "{{ fake_root }}/etc/systemd/system"
+        patterns: "*.bak-*"
+      register: _backups
+
+    - name: Read one backup to prove it holds the ORIGINAL content
+      ansible.builtin.slurp:
+        src: "{{ (_backups.files | map(attribute='path') | select('search', 'iscsi-login') | list | first) }}"
+      register: _backup_login
+
+    - name: Capture everything for verify
+      ansible.builtin.copy:
+        dest: "{{ fake_root }}/captured.json"
+        mode: "0644"
+        content: |
+          {{ {
+               'dry_login': (_after_dry.results[0].content | b64decode),
+               'dry_mount': (_after_dry.results[1].content | b64decode),
+               'apply_login': (_after_apply.results[0].content | b64decode),
+               'apply_mount': (_after_apply.results[1].content | b64decode),
+               'backups': (_backups.files | map(attribute='path') | map('basename') | list),
+               'backup_login': (_backup_login.content | b64decode),
+             } | to_nice_json }}

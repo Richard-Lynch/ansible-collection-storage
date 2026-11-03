@@ -1,0 +1,31 @@
+---
+# AUTO-GENERATED defaults file — DO NOT EDIT.
+#
+# Source of truth: roles/truenas_config_backup/meta/argument_specs.py
+# Regenerate:      venv/bin/python tools/argspec/cli.py x generate truenas_config_backup
+#
+# Edits here are silently overwritten on the next generation. To change a value or its
+# documentation, change the OptionSpec in the source file above — descriptions there
+# are emitted as the comments in this file.
+# Entrypoint:      main
+
+# Scratch directory on the TrueNAS appliance the export is written into before being fetched off. Cleaned up after a successful fetch.
+truenas_config_backup_remote_dir__default: /root/.ansible-truenas-config-backup
+
+# Include the password secret seed in the export. Required to restore local user passwords; without it a restore resets them. This makes the artefact security-sensitive — it is never logged and must land only in a secret store or the backup storage, never printed.
+truenas_config_backup_secretseed__default: true
+
+# Include root's authorized_keys in the export, so a restore preserves SSH access rather than locking the appliance out.
+truenas_config_backup_root_authorized_keys__default: true
+
+# Controller-local directory the verified artefact is fetched into. A separate play pushes it onward to durable storage from here.
+truenas_config_backup_local_staging_dir__default: /tmp/truenas-config-backup-staging
+
+# Minimum acceptable artefact size in bytes (default 100KB). It rejects the failure mode of a tiny file that LOOKS like a backup and restores nothing.
+truenas_config_backup_min_size_bytes__default: 102400
+
+# If true AND the native `config.save` export fails, fall back to copying /data/freenas-v1.db directly. Off by default: a raw copy of a live SQLite file can be caught mid-write and is not guaranteed consistent. The native export is strongly preferred; this exists only as a documented last resort.
+truenas_config_backup_fallback_to_raw_db__default: false
+
+# Generate-don't-apply gate. When false (default) the role only confirms midclt is reachable and reports the export it WOULD run and where the artefact would be staged; it does not call config.save or fetch anything. Set true to actually export, verify, and fetch the artefact.
+truenas_config_backup_apply__default: false

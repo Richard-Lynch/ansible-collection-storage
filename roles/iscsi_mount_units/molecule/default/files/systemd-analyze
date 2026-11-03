@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Fake systemd-analyze verify: clean parse, no errors.
+exit 0

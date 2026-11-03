@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Fake systemctl: reports the FAILED login unit and skipped mount that defects D2/D3 produce.
+case "$1" in
+  is-enabled) echo enabled ;;
+  is-active)  case "$2" in *iscsi-login*) echo failed ;; *) echo inactive ;; esac ;;
+  *) : ;;
+esac
+exit 0

@@ -1,0 +1,51 @@
+---
+# truenas_snapshot_tasks — reconcile TrueNAS periodic snapshot tasks via `midclt` ON the appliance
+# itself. No REST API key needed — midclt authenticates locally as root.
+# Idempotent + additive: only creates tasks that don't already exist (matched on naming_schema).
+
+- name: Validate the requested snapshot policy
+  ansible.builtin.import_tasks: validate.yml
+
+- name: Query existing snapshot tasks
+  ansible.builtin.command: midclt call pool.snapshottask.query
+  register: _snapshottask_query
+  changed_when: false
+  check_mode: false # read-only fact-gather; must run even in --check so the reconcile can plan
+
+- name: Parse existing tasks
+  ansible.builtin.set_fact:
+    _existing_schemas: "{{ (_snapshottask_query.stdout | from_json) | map(attribute='naming_schema') | list }}"
+
+# Compute the create-set here (not inline) so the decision is unit-testable offline by stubbing
+# _existing_schemas. A task is "missing" if no existing task shares its naming_schema (unique per tier).
+- name: Compute which tasks are missing
+  ansible.builtin.set_fact:
+    _tasks_to_create: >-
+      {{ truenas_snapshot_tasks | rejectattr('naming_schema', 'in', _existing_schemas) | list }}
+
+- name: Report the reconcile plan
+  ansible.builtin.debug:
+    msg: >-
+      {{ _existing_schemas | length }} existing task(s);
+      creating {{ _tasks_to_create | length }} missing:
+      {{ _tasks_to_create | map(attribute='naming_schema') | list }}
+
+- name: Create the missing snapshot tasks
+  ansible.builtin.command: >
+    midclt call pool.snapshottask.create '{{ {
+      "dataset": item.dataset,
+      "recursive": item.recursive | default(true),
+      "exclude": item.exclude | default([]),
+      "lifetime_value": item.lifetime_value,
+      "lifetime_unit": item.lifetime_unit,
+      "naming_schema": item.naming_schema,
+      "schedule": item.schedule,
+      "allow_empty": item.allow_empty | default(true),
+      "enabled": truenas_snapshot_enabled_on_create | bool
+    } | to_json }}'
+  loop: "{{ _tasks_to_create }}"
+  loop_control:
+    label: "{{ item.dataset }} / {{ item.naming_schema }}"
+  register: _created
+  changed_when: _created.rc == 0
+  failed_when: _created.rc != 0

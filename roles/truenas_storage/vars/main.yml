@@ -1,0 +1,7 @@
+---
+# Internal shorthands. Not part of the role's public interface (that is meta/argument_specs.py) —
+# these just keep the API calls readable.
+_tn_url: "https://{{ truenas_storage_api_host }}/api/v2.0"
+_tn_user: "{{ truenas_storage_api_user | default(truenas_storage_api_user__default) }}"
+_tn_pass: "{{ truenas_storage_api_password }}"
+_tn_verify: "{{ truenas_storage_validate_certs | default(truenas_storage_validate_certs__default) }}"

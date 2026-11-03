@@ -1,0 +1,62 @@
+---
+# Resolve caller-supplied vars over the generated defaults (defaults/main.yml is GENERATED from
+# meta/argument_specs.py and holds `*__default` vars).
+
+- name: Assert the identity vars were supplied
+  # No defaults for the target/portal: this role REPLACES systemd units on a hypervisor, and a
+  # wrong IQN or portal would produce units that look right and mount nothing.
+  ansible.builtin.assert:
+    that:
+      - iscsi_units_target_iqn is defined
+      - (iscsi_units_target_iqn | default('') | trim) | length > 0
+      - iscsi_units_portal_host is defined
+      - iscsi_units_mount_path is defined
+      - iscsi_units_mount_path is match('^/')
+    fail_msg: >-
+      iscsi_mount_units requires iscsi_units_target_iqn, iscsi_units_portal_host and an absolute
+      iscsi_units_mount_path.
+    success_msg: "Target {{ iscsi_units_target_iqn | default('?') }} at {{ iscsi_units_mount_path | default('?') }}"
+    quiet: true
+
+- name: Resolve defaults
+  ansible.builtin.set_fact:
+    iscsi_units_apply: "{{ iscsi_units_apply | default(iscsi_units_apply__default) }}"
+    iscsi_units_portal_port: "{{ iscsi_units_portal_port | default(iscsi_units_portal_port__default) }}"
+    iscsi_units_fs_type: "{{ iscsi_units_fs_type | default(iscsi_units_fs_type__default) }}"
+    iscsi_units_mount_options: "{{ iscsi_units_mount_options | default(iscsi_units_mount_options__default) }}"
+    iscsi_units_portal_wait_tries: "{{ iscsi_units_portal_wait_tries | default(iscsi_units_portal_wait_tries__default) }}"
+    iscsi_units_portal_wait_delay: "{{ iscsi_units_portal_wait_delay | default(iscsi_units_portal_wait_delay__default) }}"
+    iscsi_units_portal_probe_timeout: "{{ iscsi_units_portal_probe_timeout | default(iscsi_units_portal_probe_timeout__default) }}"
+    iscsi_units_restart_sec: "{{ iscsi_units_restart_sec | default(iscsi_units_restart_sec__default) }}"
+    iscsi_units_mount_timeout: "{{ iscsi_units_mount_timeout | default(iscsi_units_mount_timeout__default) }}"
+    iscsi_units_stage_dir: "{{ iscsi_units_stage_dir | default(iscsi_units_stage_dir__default) }}"
+    iscsi_units_show_diff: "{{ iscsi_units_show_diff | default(iscsi_units_show_diff__default) }}"
+    iscsi_units_doc_path: "{{ iscsi_units_doc_path | default(iscsi_units_doc_path__default) }}"
+    # Overridable ONLY so molecule can point the role at a fixture tree; production never sets it.
+    iscsi_units_systemd_dir: "{{ iscsi_units_systemd_dir | default(iscsi_units_systemd_dir__default) }}"
+
+- name: Derive the unit names and device path
+  # Derived from the IQN/mount path with the SAME escaping systemd uses, so the names can never
+  # drift from the units actually on the host.
+  ansible.builtin.set_fact:
+    iscsi_units_login_unit: >-
+      {{ 'iscsi-login@' ~ (iscsi_units_target_iqn | regex_replace('[^A-Za-z0-9_.@-]', '_')) ~ '.service' }}
+    iscsi_units_mount_unit: >-
+      {{ (iscsi_units_mount_path | regex_replace('^/', '') | regex_replace('/', '-')) ~ '.mount' }}
+    iscsi_units_device_path: >-
+      {{ '/dev/disk/by-path/ip-' ~ iscsi_units_portal_host ~ ':' ~ iscsi_units_portal_port
+         ~ '-iscsi-' ~ iscsi_units_target_iqn ~ '-lun-' ~ (iscsi_units_lun | default(0)) }}
+
+- name: Derive the backup timestamp
+  ansible.builtin.set_fact:
+    _iu_stamp: "{{ ansible_facts['date_time']['iso8601_basic_short'] | default('nodate') }}"
+
+- name: HARD GATE — facts must be gathered for a unique backup name
+  # Without gathered facts every run would reuse one backup path, so a second apply would overwrite
+  # the ORIGINAL hand-written units with already-corrected ones — destroying what may be the only
+  # copy of what was there before.
+  ansible.builtin.assert:
+    that:
+      - _iu_stamp != 'nodate'
+    fail_msg: "This role needs gather_facts: true (ansible_facts.date_time is used for backup names)."
+    quiet: true

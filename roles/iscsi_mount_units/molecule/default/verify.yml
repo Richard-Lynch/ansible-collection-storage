@@ -1,0 +1,163 @@
+---
+# Asserts on the units the REAL role rendered and installed — not on a re-derivation of its logic.
+
+- name: Verify iscsi_mount_units
+  hosts: localhost
+  gather_facts: false
+  vars:
+    fake_root: /tmp/molecule-iscsi-units
+  tasks:
+    - name: Read the captured state
+      ansible.builtin.slurp: { src: "{{ fake_root }}/captured.json" }
+      register: _raw
+
+    - name: Decode
+      ansible.builtin.set_fact:
+        c: "{{ _raw.content | b64decode | from_json }}"
+
+    - name: Strip comment lines so assertions test DIRECTIVES, not documentation
+      # The generated units explain the defects they fix in header comments, so a naive
+      # "'pvevm@' not in unit" assertion matches the unit's own explanation and fails on a correct
+      # file. Every "must not contain" check below runs against the directive-only text; the
+      # "must contain" checks can safely use the full text.
+      #
+      # DOUBLE-QUOTED, not folded (>-). In a folded scalar the backslash escapes are passed to Jinja
+      # literally, so split('\n') never splits and the whole expression silently yields an EMPTY
+      # string — which would make every "not in" assertion below pass vacuously. Only YAML's
+      # double-quoted style processes backslash escapes.
+      ansible.builtin.set_fact:
+        login_directives: "{{ c.apply_login.split('\n') | reject('match', '^\\s*#') | reject('match', '^\\s*$') | join('\n') }}"
+        mount_directives: "{{ c.apply_mount.split('\n') | reject('match', '^\\s*#') | reject('match', '^\\s*$') | join('\n') }}"
+        backup_directives: "{{ c.backup_login.split('\n') | reject('match', '^\\s*#') | reject('match', '^\\s*$') | join('\n') }}"
+
+    - name: HARD GATE — the stripped text must be non-empty
+      # Without this, a stripping bug that yields '' would make every "must not contain" assertion
+      # below pass vacuously — e.g. a backslash escape left unprocessed in a folded scalar.
+      ansible.builtin.assert:
+        that:
+          - (login_directives | length) > 100
+          - (mount_directives | length) > 100
+          - (backup_directives | length) > 50
+          - "'[Unit]' in login_directives"
+        fail_msg: >-
+          Comment stripping produced near-empty text
+          (login={{ login_directives | length }}, mount={{ mount_directives | length }},
+          backup={{ backup_directives | length }}) — assertions below would pass vacuously.
+        quiet: true
+
+    # --- generate-don't-apply ---------------------------------------------------------------------
+    - name: The DRY RUN left both live units untouched
+      # The most important property: a default run must be safe against a hypervisor whose storage
+      # units are load-bearing. If this regressed, "show me the diff" would be rewriting boot units.
+      ansible.builtin.assert:
+        that:
+          - "'pvevm@100.service' in c.dry_login"
+          - "'ConditionPathExists' in c.dry_mount"
+        fail_msg: "Dry run MODIFIED the live units."
+        quiet: true
+
+    # --- D1: the impossible dependency is gone ------------------------------------------------------
+    - name: The applied login unit has NO pvevm@ dependency
+      # D1: pvevm@100.service does not exist on current PVE, so a unit requiring it cannot be
+      # restarted by systemd at all ("Unit pvevm@100.service not found"), leaving iscsiadm by hand
+      # as the only way to log in.
+      ansible.builtin.assert:
+        that:
+          - "'pvevm@' not in login_directives"
+        fail_msg: "Applied login unit still references pvevm@:\n{{ login_directives }}"
+        quiet: true
+
+    # --- D2: the login now waits and retries --------------------------------------------------------
+    - name: The applied login unit waits for the portal and retries on failure
+      # D2: a bare oneshot with no readiness check and no Restart= lets ONE timeout on a cold boot
+      # latch `failed` and leave the mount down until someone intervenes.
+      # The portal probe is the fix: a running NAS VM is not a serving iSCSI target.
+      ansible.builtin.assert:
+        that:
+          - "'/dev/tcp/192.0.2.10/3260' in c.apply_login"
+          - "'Restart=on-failure' in c.apply_login"
+          - "'RestartSec=' in c.apply_login"
+          - "'StartLimitIntervalSec=0' in c.apply_login"
+        fail_msg: "Applied login unit lacks the portal wait / retry:\n{{ c.apply_login }}"
+        quiet: true
+
+    - name: StartLimitIntervalSec is in [Unit], not [Service]
+      # systemd.unit(5) defines it; putting it under [Service] is accepted-but-ignored by some
+      # versions and rejected by others — either way the retry budget would not behave as written.
+      vars:
+        # Split the DIRECTIVE text, not the raw file: the header comment mentions "[Service]" while
+        # explaining where the directive belongs, so splitting the raw file cuts at the comment and
+        # the [Unit] section appears empty.
+        _unit_section: "{{ login_directives.split('[Service]')[0] }}"
+      ansible.builtin.assert:
+        that:
+          - "'StartLimitIntervalSec=0' in _unit_section"
+        fail_msg: "StartLimitIntervalSec is not in the [Unit] section."
+        quiet: true
+
+    - name: The login treats 'already logged in' as success
+      # iscsiadm returns 15 (ISCSI_ERR_SESS_EXISTS) when a session exists. Without this the unit
+      # would fail on a healthy, already-mounted system — turning a no-op into a failure.
+      ansible.builtin.assert:
+        that:
+          - "'15' in c.apply_login"
+          - "'--login' in c.apply_login"
+        fail_msg: "Applied login unit does not tolerate an existing session."
+        quiet: true
+
+    # --- D3: the silent guard is gone ---------------------------------------------------------------
+    - name: The applied mount unit has NO ConditionPathExists
+      # D3, the silent guard: the condition names the iSCSI device, which cannot exist before
+      # login. A failed Condition is NOT an error — systemd records the unit as skipped and reports
+      # success, so the mount quietly does nothing on every cold boot.
+      ansible.builtin.assert:
+        that:
+          - "'ConditionPathExists' not in mount_directives"
+        fail_msg: "Applied mount unit still carries a ConditionPathExists:\n{{ mount_directives }}"
+        quiet: true
+
+    - name: The applied mount unit REQUIRES and follows the login unit
+      # The original used `Wants=`, which creates neither ordering nor failure propagation — so even
+      # had the device appeared, the mount could have been attempted first.
+      vars:
+        _login: "iscsi-login@iqn.2005-10.org.freenas.ctl_media.service"
+      ansible.builtin.assert:
+        that:
+          - "'Requires=' ~ _login in c.apply_mount"
+          - "'After=' ~ _login in c.apply_mount"
+          - "'Wants=' ~ _login not in mount_directives"
+        fail_msg: "Applied mount unit does not order after the login:\n{{ c.apply_mount }}"
+        quiet: true
+
+    - name: The mount still points at the right device, path and options
+      # The fix must not quietly change WHAT is mounted. Each field asserted individually so a
+      # partial regression cannot hide behind a substring match on the whole file.
+      ansible.builtin.assert:
+        that:
+          - "'What=/dev/disk/by-path/ip-192.0.2.10:3260-iscsi-iqn.2005-10.org.freenas.ctl:media-lun-0' in c.apply_mount"
+          - "'Where=/mnt/media' in c.apply_mount"
+          - "'Type=ext4' in c.apply_mount"
+          - "'_netdev' in c.apply_mount"
+        fail_msg: "Applied mount unit changed what it mounts:\n{{ c.apply_mount }}"
+        quiet: true
+
+    # --- rollback -------------------------------------------------------------------------------------
+    - name: Both units were backed up before replacement
+      ansible.builtin.assert:
+        that:
+          - c.backups | length == 2
+          - c.backups | select('search', 'iscsi-login') | list | length == 1
+          - c.backups | select('search', 'mnt-media') | list | length == 1
+        fail_msg: "Expected two timestamped backups, got: {{ c.backups }}"
+        quiet: true
+
+    - name: The backup holds the ORIGINAL broken unit, not the corrected one
+      # The rollback contract. If the backup contained the NEW content, restoring it would reinstate
+      # nothing — and the operator would have no route back to the pre-change state, since
+      # hand-written units are often in no version control.
+      ansible.builtin.assert:
+        that:
+          - "'pvevm@100.service' in backup_directives"
+          - "'/dev/tcp/' not in backup_directives"
+        fail_msg: "Backup does not hold the original unit:\n{{ c.backup_login }}"
+        quiet: true

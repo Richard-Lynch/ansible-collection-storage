@@ -1,0 +1,33 @@
+---
+# backup_restore_drill — PROVE a restore. Backups are not "done" until a
+# restore is proven. This drill, run against a host that already has restic_backup, does three things:
+#   1. verifies repo integrity  (restic check --read-data-subset)
+#   2. restores the latest snapshot to a SCRATCH dir (never overwrites live data)
+#   3. asserts an expected artifact (a DB dump) restored non-empty
+# and (optionally) a ZFS snapshot rollback drill on a THROWAWAY dataset.
+#
+# It reads the same B2 creds the backup uses. It is READ-ONLY against the repo (restore + check only —
+# never backup/forget/prune). Safe to run any time once backups exist.
+
+# --- which repo to drill (defaults to this host's restic_backup repo + creds) ---
+restore_drill_repo: "{{ restic_backup_repo | default('') }}"
+restore_drill_password: "{{ restic_backup_password | default('') }}"
+restore_drill_b2_key_id: "{{ restic_backup_b2_key_id | default('') }}"
+restore_drill_b2_app_key: "{{ restic_backup_b2_app_key | default('') }}"
+
+# --- scratch restore target (wiped + recreated each run; never a live path) ---
+restore_drill_target: "/var/tmp/restore-drill"
+
+# --- what must come back (proves the restore is USEFUL, not just non-empty). Paths are relative to
+# the restore target and should be artifacts the backup is known to include (e.g. a DB dump). ---
+# Each: { path: "<relative path under the restored tree>", min_bytes: <int> }
+restore_drill_expected_artifacts: []
+# --- integrity check depth: a subset % keeps the drill cheap while still reading real pack data.
+# Set to "" to skip the read-data check (structure-only), or "100%" for a full read. ---
+restore_drill_read_data_subset: "5%"
+
+# --- optional ZFS snapshot rollback drill (on the appliance, via midclt). Off by default. ---
+restore_drill_zfs_enabled: false
+# A THROWAWAY dataset — the drill writes a marker, snapshots, deletes the marker, rolls back, and
+# asserts the marker returned. NEVER point this at a real dataset.
+restore_drill_zfs_dataset: ""

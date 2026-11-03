@@ -1,0 +1,132 @@
+---
+# Deploys the TrueNAS exporter as a systemd service on a managed Linux host (not the appliance).
+#
+# NOTHING IS INSTALLED ON TRUENAS. See the docstring of files/truenas_exporter.py for why: the
+# appliance reimages /usr, /var, /etc, /root
+# and /opt on every OS upgrade, so anything put there disappears silently.
+
+- name: HARD GATE — the API key must be supplied
+  # An exporter started with an empty key serves truenas_up 0 forever, which reads as a TrueNAS
+  # outage rather than a missing credential. Refusing to deploy is the honest failure.
+  ansible.builtin.assert:
+    that:
+      - (truenas_exporter_api_key | default('') | length) > 20
+    fail_msg: >-
+      truenas_exporter_api_key was not supplied (or is implausibly short). The calling play should
+      resolve a TrueNAS API key from its secret store.
+    success_msg: "API key supplied."
+    quiet: true
+
+- name: HARD GATE — the appliance URL must be supplied
+  ansible.builtin.assert:
+    that:
+      - truenas_exporter_url | default('') is match('https://')
+    fail_msg: >-
+      truenas_exporter_url must be the appliance's https:// URL; it has no default because the
+      address is the caller's.
+    quiet: true
+
+- name: Report
+  ansible.builtin.debug:
+    msg:
+      - "host   : {{ inventory_hostname }}"
+      - "target : {{ truenas_exporter_url }}"
+      - "listen : :{{ truenas_exporter_port }}"
+      - "{{ 'DRY RUN — nothing deployed. Re-run with truenas_exporter_apply=true.' if not (truenas_exporter_apply | bool) else 'DEPLOYING.' }}"
+
+- name: Deploy
+  when: truenas_exporter_apply | bool
+  block:
+    - name: Install the exporter
+      ansible.builtin.copy:
+        src: truenas_exporter.py
+        dest: /usr/local/bin/truenas_exporter.py
+        mode: "0755"
+      notify: Restart truenas-exporter
+
+    - name: Write the credential
+      # A SEPARATE FILE, mode 0600, rather than the API key sitting in the unit. Unit files are
+      # world-readable by design and `systemctl cat` prints them — a credential there is a
+      # credential in every operator's scrollback.
+      ansible.builtin.copy:
+        dest: /etc/default/truenas-exporter
+        mode: "0600"
+        owner: root
+        group: root
+        content: |
+          TRUENAS_URL={{ truenas_exporter_url }}
+          TRUENAS_API_KEY={{ truenas_exporter_api_key }}
+          EXPORTER_PORT={{ truenas_exporter_port }}
+          TRUENAS_VERIFY_TLS={{ truenas_exporter_verify_tls | bool | lower }}
+      no_log: true
+      notify: Restart truenas-exporter
+
+    - name: Install the systemd unit
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/truenas-exporter.service
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Prometheus exporter for TrueNAS pool health
+          Documentation=file:///usr/local/bin/truenas_exporter.py
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          Type=simple
+          EnvironmentFile=/etc/default/truenas-exporter
+          ExecStart=/usr/bin/python3 /usr/local/bin/truenas_exporter.py
+          Restart=on-failure
+          RestartSec=10
+          # StartLimit* belong in [Unit], not here — a common mistake that silently does nothing.
+          # Hardening: this process needs only outbound HTTPS and a listening socket.
+          NoNewPrivileges=true
+          PrivateTmp=true
+          ProtectSystem=strict
+          ProtectHome=true
+          DynamicUser=true
+
+          [Install]
+          WantedBy=multi-user.target
+      notify: Restart truenas-exporter
+
+    - name: Reload systemd now
+      # Explicit flush: the service is enabled and verified in the next tasks, which would otherwise
+      # act on a unit file systemd has not read.
+      ansible.builtin.meta: flush_handlers
+
+    - name: Enable and start
+      ansible.builtin.systemd_service:
+        name: truenas-exporter
+        enabled: true
+        state: started
+        daemon_reload: true
+
+    - name: Wait for it to serve metrics
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ truenas_exporter_port }}/metrics"
+        return_content: true
+      register: _probe
+      retries: 10
+      delay: 3
+      until: _probe.status | default(0) == 200
+      failed_when: false
+
+    - name: HARD GATE — it must be serving, and TrueNAS must be answering
+      # Explicit assert AFTER the until loop, which continues on exhaustion under failed_when:false. Checks
+      # truenas_up 1 rather than merely HTTP 200: the exporter answers 200 even when the API is
+      # unreachable, and "the exporter is up" is not the same as "TrueNAS is being monitored".
+      ansible.builtin.assert:
+        that:
+          - _probe.status | default(0) == 200
+          - "'truenas_up 1' in (_probe.content | default(''))"
+          - "'truenas_pool_healthy{' in (_probe.content | default(''))"
+        fail_msg: >-
+          Exporter on {{ inventory_hostname }}:{{ truenas_exporter_port }} is not serving pool
+          metrics (status {{ _probe.status | default('none') }}). If it returns truenas_up 0 the
+          API call is failing — check the key and `journalctl -u truenas-exporter -n 30`.
+        success_msg: >-
+          Exporter is serving pool metrics and TrueNAS answered
+          ({{ _probe.content | default('') | regex_findall('truenas_pool_healthy') | length }}
+          pool(s)).
+        quiet: true

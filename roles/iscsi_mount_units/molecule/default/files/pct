@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Fake pct: the guest is stopped (correctly, since the mount is absent).
+[ "$1" = "status" ] && echo "status: stopped"
+exit 0

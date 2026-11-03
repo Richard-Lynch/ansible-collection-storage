@@ -1,0 +1,25 @@
+---
+# Offline: runs the REAL role against fixture units carrying all three defects, with
+# systemd-analyze/systemctl/iscsiadm/pct faked. No PVE, no systemd, no root.
+#
+# Coverage: beyond a parse/check tier. The rendered unit content, both defect-removal gates, the backup path and the
+# dry-run guarantee are genuinely asserted against real role output.
+# NOT covered, and not claimed: whether systemd actually accepts the units at boot, and whether the
+# mount succeeds — both need a real host and a real reboot.
+dependency: { name: galaxy }
+driver: { name: default }
+platforms: [{ name: localhost }]
+provisioner:
+  name: ansible
+  inventory: { host_vars: { localhost: { ansible_connection: local } } }
+  playbooks: { converge: converge.yml, verify: verify.yml }
+  env:
+    ANSIBLE_ROLES_PATH: "${MOLECULE_PROJECT_DIRECTORY}/../"
+verifier: { name: ansible }
+scenario:
+  # No idempotence step: converge stages fixtures on purpose (so a stale fixture cannot make a
+  # broken role pass). The role's own idempotence is asserted in verify.yml via a second apply.
+  test_sequence:
+    - syntax
+    - converge
+    - verify

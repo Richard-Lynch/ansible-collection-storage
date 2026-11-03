@@ -1,0 +1,62 @@
+---
+# AUTO-GENERATED defaults file — DO NOT EDIT.
+#
+# Source of truth: roles/iscsi_mount_units/meta/argument_specs.py
+# Regenerate:      venv/bin/python tools/argspec/cli.py x generate iscsi_mount_units
+#
+# Edits here are silently overwritten on the next generation. To change a value or its
+# documentation, change the OptionSpec in the source file above — descriptions there
+# are emitted as the comments in this file.
+# Entrypoint:      main
+
+# false (default) stages + validates + diffs, writing nothing to
+# /etc/systemd/system. true installs and enables the units (still without
+# starting them).
+iscsi_units_apply__default: false
+
+# iSCSI portal TCP port.
+iscsi_units_portal_port__default: 3260
+
+# LUN number, used to build the by-path device name.
+iscsi_units_lun__default: 0
+
+# Filesystem type of the LUN.
+iscsi_units_fs_type__default: ext4
+
+# Mount options. _netdev matters: it tells systemd this is network storage.
+iscsi_units_mount_options__default: defaults,_netdev,noatime,discard
+
+# How many times the login unit probes the portal before giving up. With the
+# default delay this is a 5-minute window — enough for a NAS VM to boot and
+# start serving on a cold start, which is the race being fixed.
+iscsi_units_portal_wait_tries__default: 60
+
+# Seconds between portal probes.
+iscsi_units_portal_wait_delay__default: 5
+
+# Per-probe TCP connect timeout in seconds.
+iscsi_units_portal_probe_timeout__default: 3
+
+# Delay before systemd retries a failed login. Without Restart=, one
+# transient timeout leaves the mount down until someone intervenes.
+iscsi_units_restart_sec__default: 30
+
+# How long the mount unit waits for the device to appear after login (udev
+# creates it asynchronously).
+iscsi_units_mount_timeout__default: 120s
+
+# Where the units are rendered for validation and diffing. On tmpfs so a dry
+# run leaves nothing behind across a reboot.
+iscsi_units_stage_dir__default: /run/ansible-iscsi-units
+
+# Print the full unit diff, not just changed/identical.
+iscsi_units_show_diff__default: true
+
+# Where unit files live. Overridable ONLY so the molecule scenario can run
+# the real role against a fixture tree; production never sets it.
+iscsi_units_systemd_dir__default: /etc/systemd/system
+
+# Documentation= path recorded in the generated units, so an operator
+# reading `systemctl cat` on the host is pointed at the reasoning. The role
+# does not install a file there; point it at wherever you keep the notes.
+iscsi_units_doc_path__default: /usr/local/share/doc/iscsi_mount_units/README.md

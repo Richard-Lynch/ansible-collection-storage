@@ -1,0 +1,313 @@
+---
+# Brings a host's iSCSI login + mount systemd units under Ansible control, removing the boot race
+# described in the README (D1-D3). Generate-don't-apply.
+#
+# See roles/iscsi_mount_units/README.md.
+
+- name: Resolve declared options over their generated defaults
+  # GENERATED from meta/argument_specs.py — binds every declared option to its default, so a
+  # default can never be declared-but-dead (the variable evaluating Undefined at run time).
+  ansible.builtin.include_tasks: _resolve_defaults.yml
+
+- name: Setup vars
+  ansible.builtin.include_tasks: setup_vars.yml
+
+# --- 1. capture the current state, before touching anything --------------------------------------
+- name: Read the existing units and their state
+  # Everything this role needs to decide, report, and (if it goes wrong) explain. Read FIRST so the
+  # backup and the diff are both taken against the true starting point.
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: |
+      set -o pipefail
+      for u in {{ iscsi_units_login_unit | quote }} {{ iscsi_units_mount_unit | quote }}; do
+        p="{{ iscsi_units_systemd_dir }}/$u"
+        if [ -f "$p" ]; then
+          echo "EXISTS|$u|$(md5sum "$p" | awk '{print $1}')"
+        else
+          echo "EXISTS|$u|absent"
+        fi
+        en=$(systemctl is-enabled "$u" 2>/dev/null); en=$(head -1 <<<"${en:-not-found}")
+        ac=$(systemctl is-active  "$u" 2>/dev/null); ac=$(head -1 <<<"${ac:-unknown}")
+        echo "STATE|$u|$en|$ac"
+      done
+      echo "MOUNTED|$(findmnt -n -o TARGET {{ iscsi_units_mount_path | quote }} 2>/dev/null || echo 'no')"
+      echo "SESSION|$(iscsiadm -m session 2>/dev/null | grep -c {{ iscsi_units_target_iqn | quote }} || true)"
+      echo "GUEST|$(pct status {{ iscsi_units_guest_ctid }} 2>/dev/null | awk '{print $2}')"
+  register: _iu_state
+  changed_when: false
+
+- name: HARD GATE — the state read must have produced every marker
+  # An incomplete read here would let the role report a clean diff for units it never actually
+  # looked at, and then replace them anyway.
+  ansible.builtin.assert:
+    that:
+      - _iu_state.rc == 0
+      - (_iu_state.stdout_lines | select('match', '^EXISTS') | list | length) == 2
+      - (_iu_state.stdout_lines | select('match', '^STATE') | list | length) == 2
+      - (_iu_state.stdout_lines | select('match', '^MOUNTED') | list | length) == 1
+    fail_msg: >-
+      Could not read unit state from {{ inventory_hostname }} (rc={{ _iu_state.rc }}).
+      Got: {{ _iu_state.stdout_lines | default([]) }}
+    quiet: true
+
+- name: Parse the current state
+  ansible.builtin.set_fact:
+    _iu_mounted: >-
+      {{ (_iu_state.stdout_lines | select('match', '^MOUNTED') | first).split('|')[1] != 'no' }}
+    _iu_states: >-
+      {{ _iu_state.stdout_lines | select('match', '^STATE') | map('split', '|') | list }}
+    _iu_guest: >-
+      {{ (_iu_state.stdout_lines | select('match', '^GUEST') | first).split('|')[1] | default('unknown', true) }}
+
+- name: Report the current state
+  ansible.builtin.debug:
+    msg:
+      - "host:              {{ inventory_hostname }}"
+      - "{{ iscsi_units_mount_path }} mounted: {{ _iu_mounted }}"
+      - "units:             {{ _iu_states | map('join', ' ') | list }}"
+      - "guest {{ iscsi_units_guest_ctid }}: {{ _iu_guest }}"
+      - "apply:             {{ iscsi_units_apply | bool }}"
+
+# --- 2. render the replacements to a staging area, and diff --------------------------------------
+- name: Render the new units to a staging directory
+  # Rendered to /run (tmpfs, cleared on reboot) rather than straight into /etc/systemd/system, so a
+  # dry run can show a real diff of real content without touching the live units. This is what lets
+  # "generate" mean something more than "print what I intend".
+  ansible.builtin.file:
+    path: "{{ iscsi_units_stage_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Stage the login unit
+  ansible.builtin.template:
+    src: iscsi-login.service.j2
+    dest: "{{ iscsi_units_stage_dir }}/{{ iscsi_units_login_unit }}"
+    mode: "0644"
+    lstrip_blocks: true
+
+- name: Stage the mount unit
+  ansible.builtin.template:
+    src: iscsi-mount.mount.j2
+    dest: "{{ iscsi_units_stage_dir }}/{{ iscsi_units_mount_unit }}"
+    mode: "0644"
+    lstrip_blocks: true
+
+- name: Validate the staged units with systemd-analyze
+  # Catches malformed directives BEFORE they reach /etc/systemd/system. A unit that fails to parse
+  # is not merely inert — for a mount in the boot path it can hold up multi-user.target.
+  # systemd-analyze verify exits non-zero on real syntax errors; it also warns about things it
+  # cannot resolve out of context, so rc is reported and gated rather than blindly trusted.
+  ansible.builtin.command:
+    cmd: "systemd-analyze verify {{ iscsi_units_stage_dir }}/{{ item }}"
+  register: _iu_verify
+  changed_when: false
+  failed_when: false
+  loop:
+    - "{{ iscsi_units_login_unit }}"
+    - "{{ iscsi_units_mount_unit }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: HARD GATE — the staged units must parse
+  # Only genuine syntax/directive errors fail. systemd-analyze emits warnings for unresolvable
+  # dependencies (e.g. a template instance it cannot expand in isolation), which are not defects
+  # here — matching on the error text rather than rc alone keeps the gate specific.
+  vars:
+    _bad: >-
+      {{ _iu_verify.results | selectattr('stderr', 'search', '(?i)(unknown lvalue|invalid|failed to parse|bad unit file)')
+         | map(attribute='item') | list }}
+  ansible.builtin.assert:
+    that:
+      - _bad | length == 0
+    fail_msg: >-
+      Staged unit(s) failed systemd-analyze verify: {{ _bad | join(', ') }}.
+      {{ _iu_verify.results | map(attribute='stderr') | select('truthy') | join(' | ') }}
+    success_msg: "Staged units parse cleanly."
+    quiet: true
+
+- name: Show the diff between the live units and the staged replacements
+  # The actual "generate" output: what would change, line by line.
+  ansible.builtin.command:
+    cmd: "diff -u {{ iscsi_units_systemd_dir }}/{{ item }} {{ iscsi_units_stage_dir }}/{{ item }}"
+  register: _iu_diff
+  changed_when: false
+  failed_when: false
+  loop:
+    - "{{ iscsi_units_login_unit }}"
+    - "{{ iscsi_units_mount_unit }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Report the diff
+  ansible.builtin.debug:
+    msg: "{{ item.item }}: {{ 'IDENTICAL' if item.rc == 0 else 'WOULD CHANGE' }}"
+  loop: "{{ _iu_diff.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Report the diff body
+  ansible.builtin.debug:
+    var: item.stdout_lines
+  loop: "{{ _iu_diff.results | selectattr('rc', 'ne', 0) | list }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when: iscsi_units_show_diff | bool
+
+- name: Report that this is a dry run
+  ansible.builtin.debug:
+    msg: >-
+      DRY RUN — the units above were rendered to {{ iscsi_units_stage_dir }} and validated, but
+      {{ iscsi_units_systemd_dir }} was NOT modified. Re-run with iscsi_units_apply=true to install them.
+  when: not (iscsi_units_apply | bool)
+
+# --- 3. apply --------------------------------------------------------------------------------------
+- name: Install the corrected units
+  when: iscsi_units_apply | bool
+  block:
+    - name: Back up the existing units
+      # Timestamped, and never overwritten (force: false), so the ORIGINAL hand-written units
+      # survive any number of re-applies. Hand-written units are often in no version control, so
+      # these files may be the only record of what was there before.
+      ansible.builtin.copy:
+        src: "{{ iscsi_units_systemd_dir }}/{{ item }}"
+        dest: "{{ iscsi_units_systemd_dir }}/{{ item }}.bak-{{ _iu_stamp }}"
+        remote_src: true
+        mode: "0644"
+        force: false
+      loop:
+        - "{{ iscsi_units_login_unit }}"
+        - "{{ iscsi_units_mount_unit }}"
+      loop_control:
+        label: "{{ item }}"
+
+    - name: Install the login unit
+      ansible.builtin.template:
+        src: iscsi-login.service.j2
+        dest: "{{ iscsi_units_systemd_dir }}/{{ iscsi_units_login_unit }}"
+        mode: "0644"
+        lstrip_blocks: true
+      register: _iu_login_written
+
+    - name: Install the mount unit
+      ansible.builtin.template:
+        src: iscsi-mount.mount.j2
+        dest: "{{ iscsi_units_systemd_dir }}/{{ iscsi_units_mount_unit }}"
+        mode: "0644"
+        lstrip_blocks: true
+      register: _iu_mount_written
+
+    - name: Reload systemd
+      # Same reasoning as the enable below: acts on the real systemd, so it is skipped when the
+      # role is pointed at a fixture directory.
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+      when: iscsi_units_systemd_dir == '/etc/systemd/system'
+
+    - name: Clear any latched failure on the units
+      # The old login unit is very likely sitting in `failed` (that is the bug). A failed unit will
+      # not start until reset, so without this the enable/start below is a silent no-op.
+      ansible.builtin.command:
+        cmd: "systemctl reset-failed {{ item }}"
+      changed_when: false
+      failed_when: false
+      loop:
+        - "{{ iscsi_units_login_unit }}"
+        - "{{ iscsi_units_mount_unit }}"
+      loop_control:
+        label: "{{ item }}"
+
+    - name: Enable both units for boot
+      # enabled, NOT started: this role deliberately does not change the RUNNING state of a mount
+      # holding a live filesystem. Starting/remounting is the recovery play's job, and the real
+      # test of boot behaviour is a reboot, not a start here.
+      #
+      # Skipped when writing to a non-default unit directory, which only happens in the molecule
+      # scenario: `systemctl enable` acts on the REAL systemd (the module talks D-Bus, so a faked
+      # systemctl on PATH cannot intercept it), and enabling a fixture unit on the controller would
+      # be both meaningless and a genuine side effect on the developer's machine. Guarded on the
+      # directory rather than on a test-only flag, so the production path can never take the skip.
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        enabled: true
+        daemon_reload: false
+      loop:
+        - "{{ iscsi_units_login_unit }}"
+        - "{{ iscsi_units_mount_unit }}"
+      loop_control:
+        label: "{{ item }}"
+      when: iscsi_units_systemd_dir == '/etc/systemd/system'
+
+    - name: Read back what is now installed
+      # Explicit read-back: "the template task reported changed" is a weaker statement than "the
+      # file on disk is the corrected unit and systemd accepts it".
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -o pipefail
+          for u in {{ iscsi_units_login_unit | quote }} {{ iscsi_units_mount_unit | quote }}; do
+            p="{{ iscsi_units_systemd_dir }}/$u"
+            en=$(systemctl is-enabled "$u" 2>/dev/null); en=$(head -1 <<<"${en:-not-found}")
+            echo "STATE|$u|$en"
+            # Counted with grep -c into a variable, not piped through sed: '|' is both this
+            # protocol's delimiter and sed's, and building the marker inside a sed expression was
+            # unreadable and easy to get subtly wrong.
+            # Counts DIRECTIVES, not mentions. The generated units explain the defects they fix
+            # in header comments, so a naive `grep -c pvevm@` matches its own documentation and the
+            # gate would fail on a correct unit. Anchoring to the start
+            # of a line (comments begin with '#') is what makes the check mean "is this directive
+            # present" rather than "does this string appear anywhere".
+            pv=$(grep -cE '^[[:space:]]*(Requires|After|Wants|BindsTo|PartOf)=.*pvevm@' "$p" 2>/dev/null || true)
+            cd=$(grep -cE '^[[:space:]]*ConditionPathExists=' "$p" 2>/dev/null || true)
+            echo "PVEVM|$u|${pv:-0}"
+            echo "COND|$u|${cd:-0}"
+          done
+      register: _iu_readback
+      changed_when: false
+
+    - name: HARD GATE — the installed units must be the corrected ones
+      # Asserts the two specific defects are GONE, rather than merely that a write happened:
+      #   - no reference to the non-existent pvevm@ unit (D1)
+      #   - no ConditionPathExists that silently skips the mount (D3)
+      # and that both units are enabled for boot.
+      vars:
+        _pvevm_refs: >-
+          {{ _iu_readback.stdout_lines | select('match', '^PVEVM')
+             | map('split', '|') | map(attribute=2) | map('int') | sum }}
+        _cond_refs: >-
+          {{ _iu_readback.stdout_lines | select('match', '^COND')
+             | map('split', '|') | map(attribute=2) | map('int') | sum }}
+        # Only meaningful when the real systemd was touched; under a fixture directory the enable
+        # step is skipped by design, so requiring 'enabled' there would assert a state the role
+        # deliberately did not create.
+        _not_enabled: >-
+          {{ (_iu_readback.stdout_lines | select('match', '^STATE')
+              | map('split', '|') | rejectattr(2, 'eq', 'enabled')
+              | map(attribute=1) | list)
+             if iscsi_units_systemd_dir == '/etc/systemd/system' else [] }}
+      ansible.builtin.assert:
+        that:
+          - _pvevm_refs | int == 0
+          - _cond_refs | int == 0
+          - _not_enabled | length == 0
+        fail_msg: >-
+          Installed units are not correct:
+          pvevm@ references={{ _pvevm_refs }} (want 0),
+          ConditionPathExists={{ _cond_refs }} (want 0),
+          not enabled={{ _not_enabled | join(', ') }}.
+          RESTORE: cp {{ iscsi_units_systemd_dir }}/<unit>.bak-{{ _iu_stamp }} /etc/systemd/system/<unit>
+          && systemctl daemon-reload
+        success_msg: >-
+          Both units installed, enabled, and free of the pvevm@/ConditionPathExists defects.
+        quiet: true
+
+    - name: Report what changed and how to undo it
+      ansible.builtin.debug:
+        msg:
+          - "INSTALLED corrected units on {{ inventory_hostname }}:"
+          - "  {{ iscsi_units_login_unit }}  (portal wait + retry; no pvevm@ dependency)"
+          - "  {{ iscsi_units_mount_unit }}  (Requires+After the login; no ConditionPathExists)"
+          - "The RUNNING state was not changed — the real test is a reboot."
+          - "Backups: {{ iscsi_units_systemd_dir }}/<unit>.bak-{{ _iu_stamp }}"
+          - "ROLLBACK: cp {{ iscsi_units_systemd_dir }}/<unit>.bak-{{ _iu_stamp }} /etc/systemd/system/<unit>"
+          - "          && systemctl daemon-reload"

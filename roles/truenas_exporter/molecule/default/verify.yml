@@ -1,0 +1,40 @@
+---
+- name: Verify the input gates fired, and only where they should
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Read the results converge.yml wrote
+      ansible.builtin.slurp:
+        src: /tmp/molecule-truenas-exporter-results.json
+      register: _raw
+
+    - name: Parse them
+      ansible.builtin.set_fact:
+        _r: "{{ _raw.content | b64decode | from_json }}"
+
+    - name: The missing URL was refused by the argspec, naming the option
+      ansible.builtin.assert:
+        that:
+          - _r.no_url_refused | bool
+          - "'truenas_exporter_url' in _r.no_url_msg"
+        fail_msg: "a call with no truenas_exporter_url was not refused by the argspec"
+
+    - name: The http URL was refused
+      ansible.builtin.assert:
+        that: [_r.http_refused | bool]
+        fail_msg: "a plain-http truenas_exporter_url was accepted"
+
+    - name: The valid dry run completed
+      ansible.builtin.assert:
+        that: [_r.dry_run_done | bool]
+        fail_msg: "a dry run with valid inputs did not complete"
+
+    - name: Nothing was deployed by the dry run
+      ansible.builtin.stat:
+        path: /etc/default/truenas-exporter
+      register: _env
+
+    - name: Assert the credential file was not written
+      ansible.builtin.assert:
+        that: [not _env.stat.exists]
+        fail_msg: "the dry run wrote /etc/default/truenas-exporter"

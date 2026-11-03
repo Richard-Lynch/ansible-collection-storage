@@ -1,0 +1,37 @@
+{{ ansible_managed | comment }}
+# Managed by roles/iscsi_mount_units. Hand edits will be overwritten.
+#
+# Mounts an iSCSI-backed filesystem, ordered AFTER a successful login.
+#
+# Avoids the silent guard common in hand-written mount units (D3 in the role README):
+#
+#   ConditionPathExists=/dev/disk/by-path/ip-...-lun-0
+#
+# That path is the iSCSI device, which CANNOT exist until the login has succeeded. At boot it does
+# not — and a failed Condition is NOT an error in systemd: the unit is recorded as skipped, reports
+# success, and is never retried. So on every cold boot the mount quietly does nothing and the host
+# looks healthy. Such units also tend to use `Wants=` on the login unit, which creates no ordering
+# and no failure propagation, so even if the device appeared the mount could run first.
+#
+# The replacement states the real dependency: Requires + After the login unit. If the login fails,
+# this fails too — loudly, which is what a filesystem other services depend on warrants.
+
+[Unit]
+Description=Mount {{ iscsi_units_target_iqn }} at {{ iscsi_units_mount_path }}
+Documentation=file://{{ iscsi_units_doc_path }}
+Requires={{ iscsi_units_login_unit }}
+After={{ iscsi_units_login_unit }}
+Wants=network-online.target
+After=network-online.target
+
+[Mount]
+What={{ iscsi_units_device_path }}
+Where={{ iscsi_units_mount_path }}
+Type={{ iscsi_units_fs_type }}
+Options={{ iscsi_units_mount_options }}
+# The device node appears asynchronously after login (udev), so allow a bounded wait rather than
+# failing on the first attempt.
+TimeoutSec={{ iscsi_units_mount_timeout }}
+
+[Install]
+WantedBy=multi-user.target

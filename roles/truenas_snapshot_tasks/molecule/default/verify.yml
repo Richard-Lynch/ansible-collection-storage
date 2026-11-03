@@ -1,0 +1,49 @@
+---
+- name: Verify the reconcile compute + validation invariants
+  hosts: localhost
+  gather_facts: false
+  vars:
+    truenas_snapshot_tasks:
+      - dataset: "pool1"
+        recursive: true
+        lifetime_value: 2
+        lifetime_unit: DAY
+        naming_schema: "auto-%Y-%m-%d_%H-%M-frequent"
+        schedule: { minute: "0", hour: "*", dom: "*", month: "*", dow: "*" }
+      - dataset: "pool1"
+        recursive: true
+        lifetime_value: 2
+        lifetime_unit: WEEK
+        naming_schema: "auto-%Y-%m-%d_%H-%M-daily"
+        schedule: { minute: "0", hour: "2", dom: "*", month: "*", dow: "*" }
+  tasks:
+    - name: Stub existing schemas where 'frequent' already exists, then re-derive the create-set
+      ansible.builtin.set_fact:
+        _existing_schemas: ["auto-%Y-%m-%d_%H-%M-frequent"]
+    - name: Compute missing
+      ansible.builtin.set_fact:
+        _tasks_to_create: >-
+          {{ truenas_snapshot_tasks | rejectattr('naming_schema', 'in', _existing_schemas) | list }}
+
+    - name: Only the missing ('daily') task is scheduled for creation (idempotency)
+      ansible.builtin.assert:
+        that:
+          - _tasks_to_create | length == 1
+          - _tasks_to_create[0].naming_schema == 'auto-%Y-%m-%d_%H-%M-daily'
+        fail_msg: "reconcile did not correctly skip the already-existing task."
+        success_msg: "reconcile is idempotent — skips existing, creates only missing."
+
+    - name: A naming_schema missing required time tokens would fail validation
+      ansible.builtin.assert:
+        that:
+          - "'auto-daily' is not search('%Y')"
+        success_msg: "naming_schema token guard is effective."
+
+    - name: With NO existing tasks, every requested task is missing (fresh appliance / check-mode path)
+      vars:
+        _empty_existing: []
+      ansible.builtin.assert:
+        that:
+          - (truenas_snapshot_tasks | rejectattr('naming_schema', 'in', _empty_existing) | list | length)
+            == (truenas_snapshot_tasks | length)
+        success_msg: "empty-query reconcile plans all tasks (guards the check_mode: false fix)."

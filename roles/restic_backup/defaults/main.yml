@@ -1,0 +1,36 @@
+---
+# restic_backup — install restic + a systemd-timed backup of a host's critical small state to an
+# Object-Locked Backblaze B2 bucket.
+#
+# Design: DBs are DUMPED (not copied live); the repo is append-only from this host (the B2 app key
+# cannot delete — pruning uses a SEPARATE key elsewhere).
+
+restic_backup_version: "0.17.3"
+
+# --- B2 repository ---
+# The repo URL: b2:<bucket>:<path>. The bucket must have Object Lock (compliance) enabled.
+# REQUIRED, no default (meta/argument_specs.py): restic_backup_b2_bucket, restic_backup_b2_key_id,
+# restic_backup_b2_app_key and restic_backup_password. The bucket and the credentials are the
+# caller's: declare them in inventory, resolving the three credentials from a secret store at run
+# time. The app key should be a NO-DELETE key; pruning uses a separate key elsewhere.
+restic_backup_repo: "b2:{{ restic_backup_b2_bucket }}:{{ inventory_hostname }}"
+
+# --- what to back up (per-host; override in inventory). Paths + pre-backup dump commands. ---
+# Static paths always included:
+restic_backup_paths: []
+# Dump commands run before the snapshot; each writes into restic_backup_dump_dir (which IS backed up).
+# e.g. sqlite3 /config/app.db ".backup {{ restic_backup_dump_dir }}/app.db"
+restic_backup_dumps: []
+restic_backup_dump_dir: "/var/backups/restic-dumps"
+
+# --- schedule + retention (retention applies via `forget`; PRUNE is done elsewhere w/ a delete key) ---
+restic_backup_oncalendar: "*-*-* 03:30:00" # nightly 03:30
+restic_backup_keep_daily: 7
+restic_backup_keep_weekly: 4
+restic_backup_keep_monthly: 6
+
+# --- dead-man switch: ping this URL on success (Healthchecks.io or any off-site monitor) ---
+restic_backup_healthcheck_url: ""
+
+# Safety: default false = install + configure the timer but DON'T run a backup during the play.
+restic_backup_run_now: false

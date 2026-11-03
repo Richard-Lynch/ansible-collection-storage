@@ -1,0 +1,27 @@
+---
+# AUTO-GENERATED argument spec — DO NOT EDIT.
+#
+# Source of truth: roles/truenas_snapshot_tasks/meta/argument_specs.py
+# Regenerate:      venv/bin/python tools/argspec/cli.py x generate truenas_snapshot_tasks
+#
+# Edits here are silently overwritten on the next generation. To change a value or its
+# documentation, change the OptionSpec in the source file above — descriptions there
+# are emitted as the comments in this file.
+argument_specs:
+  main:
+    short_description: Reconcile TrueNAS SCALE periodic ZFS snapshot tasks via midclt on the appliance
+    version_added: '1.0'
+    author: Collection maintainers
+    options:
+      truenas_snapshot_tasks:
+        description:
+          - Per-dataset snapshot policy ({dataset, recursive, lifetime_value, lifetime_unit, naming_schema, schedule, ...}).
+        type: list
+        required: true
+        elements: dict
+      truenas_snapshot_enabled_on_create:
+        description:
+          - Enable newly-created tasks immediately (default false — an operator reviews first).
+        type: bool
+        required: false
+        default: false

@@ -1,0 +1,32 @@
+---
+# Exercise the offline-testable logic: validation + the "which tasks are missing" reconcile compute.
+# No real TrueNAS appliance is contacted — the existing-tasks list is stubbed.
+- name: Converge
+  hosts: localhost
+  gather_facts: false
+  vars:
+    truenas_snapshot_tasks:
+      - dataset: "pool1"
+        recursive: true
+        lifetime_value: 2
+        lifetime_unit: DAY
+        naming_schema: "auto-%Y-%m-%d_%H-%M-frequent"
+        schedule: { minute: "0", hour: "*", dom: "*", month: "*", dow: "*" }
+      - dataset: "pool1"
+        recursive: true
+        lifetime_value: 2
+        lifetime_unit: WEEK
+        naming_schema: "auto-%Y-%m-%d_%H-%M-daily"
+        schedule: { minute: "0", hour: "2", dom: "*", month: "*", dow: "*" }
+  tasks:
+    - name: Run validation (must pass for a well-formed policy)
+      ansible.builtin.import_tasks: "{{ playbook_dir }}/../../tasks/validate.yml"
+
+    - name: Stub the appliance's existing task schemas (the 'frequent' one already exists)
+      ansible.builtin.set_fact:
+        _existing_schemas: ["auto-%Y-%m-%d_%H-%M-frequent"]
+
+    - name: Compute which tasks are missing (same expression as the role)
+      ansible.builtin.set_fact:
+        _tasks_to_create: >-
+          {{ truenas_snapshot_tasks | rejectattr('naming_schema', 'in', _existing_schemas) | list }}

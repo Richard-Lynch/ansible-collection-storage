@@ -1,0 +1,58 @@
+{{ ansible_managed | comment }}
+# Managed by roles/iscsi_mount_units. Hand edits will be overwritten.
+#
+# Logs in to an iSCSI target once the portal is actually reachable.
+#
+# Avoids two defects common in hand-written login units (see the role README):
+#
+#   D1  Requires=pvevm@<vmid>.service — a unit that does NOT exist on current PVE (guests start
+#       via pve-guests/pvescheduler, not per-guest units). At boot the unsatisfiable Requires is
+#       ignored; on any manual restart systemd refuses outright with "Unit pvevm@... not found",
+#       so the unit cannot be restarted by hand at all.
+#
+#   D2  A bare oneshot iscsiadm --login with no readiness check and no retry. It fires shortly
+#       after boot, before the NAS is serving iSCSI, gets "initiator reported error (8 - connection
+#       timed out)", and latches `failed` forever.
+#
+# The fix for both is to depend on the thing that actually has to be true — the PORTAL ANSWERING —
+# rather than on a VM's power state. A running VM is not a serving target; that gap IS D2.
+
+[Unit]
+Description=Login to iSCSI target %I (waits for the portal to answer)
+Documentation=file://{{ iscsi_units_doc_path }}
+Wants=network-online.target
+After=network-online.target iscsid.service
+Requires=iscsid.service
+# Rate limiting lives in [Unit], not [Service] (systemd.unit(5)). 0 = unlimited: a NAS that is slow
+# to boot must not exhaust a start-limit and leave the mount permanently down, which is the
+# latch-and-give-up behaviour of D2.
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+# Wait for the portal before attempting the login. This is the readiness check the original unit
+# lacked: the NAS VM can be "running" for minutes before its iSCSI service accepts connections.
+# Bounded so a genuinely-down NAS fails loudly rather than hanging the boot forever.
+ExecStartPre=/bin/bash -c 'for i in $(seq 1 {{ iscsi_units_portal_wait_tries }}); do \
+  if timeout {{ iscsi_units_portal_probe_timeout }} bash -c "cat < /dev/null > /dev/tcp/{{ iscsi_units_portal_host }}/{{ iscsi_units_portal_port }}" 2>/dev/null; then \
+    echo "portal {{ iscsi_units_portal_host }}:{{ iscsi_units_portal_port }} is up (after $((i-1)) retries)"; exit 0; \
+  fi; \
+  sleep {{ iscsi_units_portal_wait_delay }}; \
+done; \
+echo "portal {{ iscsi_units_portal_host }}:{{ iscsi_units_portal_port }} did not answer within {{ iscsi_units_portal_wait_tries | int * iscsi_units_portal_wait_delay | int }}s" >&2; exit 1'
+
+# rc 15 is ISCSI_ERR_SESS_EXISTS ("already logged in"), which counts as success here — it makes
+# the unit idempotent under restart rather than failing on a healthy system.
+ExecStart=/bin/bash -c '/sbin/iscsiadm -m node -T {{ iscsi_units_target_iqn }} -p {{ iscsi_units_portal_host }}:{{ iscsi_units_portal_port }} --login; rc=$?; [ "$rc" -eq 0 ] || [ "$rc" -eq 15 ]'
+
+ExecStop=-/sbin/iscsiadm -m node -T {{ iscsi_units_target_iqn }} -p {{ iscsi_units_portal_host }}:{{ iscsi_units_portal_port }} --logout
+
+# Self-healing. Without Restart=, ONE transient timeout on a cold boot leaves the filesystem
+# unmounted until someone intervenes.
+Restart=on-failure
+RestartSec={{ iscsi_units_restart_sec }}
+
+[Install]
+WantedBy=multi-user.target

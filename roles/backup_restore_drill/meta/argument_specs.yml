@@ -1,0 +1,62 @@
+---
+# AUTO-GENERATED argument spec — DO NOT EDIT.
+#
+# Source of truth: roles/backup_restore_drill/meta/argument_specs.py
+# Regenerate:      venv/bin/python tools/argspec/cli.py x generate backup_restore_drill
+#
+# Edits here are silently overwritten on the next generation. To change a value or its
+# documentation, change the OptionSpec in the source file above — descriptions there
+# are emitted as the comments in this file.
+argument_specs:
+  main:
+    short_description: 'Prove a restore: restic check + restore + verify artifacts'
+    version_added: '1.0'
+    author: Collection maintainers
+    options:
+      restore_drill_repo:
+        description:
+          - restic repo URL to drill (defaults to restic_backup_repo).
+        type: str
+        required: false
+      restore_drill_password:
+        description:
+          - restic repo password (defaults to restic_backup_password).
+        type: str
+        required: false
+      restore_drill_b2_key_id:
+        description:
+          - B2 key id (defaults to restic_backup_b2_key_id).
+        type: str
+        required: false
+      restore_drill_b2_app_key:
+        description:
+          - B2 app key (defaults to restic_backup_b2_app_key).
+        type: str
+        required: false
+      restore_drill_target:
+        description:
+          - Scratch restore dir (wiped each run; never a live path).
+        type: str
+        required: false
+      restore_drill_expected_artifacts:
+        description:
+          - Artifacts that must return non-empty ({path, min_bytes}).
+        type: list
+        required: false
+        elements: dict
+      restore_drill_read_data_subset:
+        description:
+          - restic check --read-data-subset value ('' to skip, '100%' for full).
+        type: str
+        required: false
+      restore_drill_zfs_enabled:
+        description:
+          - Also drill a ZFS snapshot rollback on a throwaway dataset.
+        type: bool
+        required: false
+        default: false
+      restore_drill_zfs_dataset:
+        description:
+          - Throwaway dataset for the ZFS rollback drill (name must contain 'restore-drill'/'scratch').
+        type: str
+        required: false

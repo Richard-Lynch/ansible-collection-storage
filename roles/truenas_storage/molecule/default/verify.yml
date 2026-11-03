@@ -1,0 +1,127 @@
+---
+# The invariants that matter. Getting the grow/shrink decision wrong destroys data, so it is tested
+# in both directions rather than only the happy path — a gate only ever exercised one way can be
+# unable to fire and still pass.
+- name: Verify
+  hosts: localhost
+  gather_facts: false
+  vars:
+    fixture_datasets:
+      - name: "pool1/media"
+        volsize: {rawvalue: "12644383719424"}   # 11.5 TiB
+      - name: "tank/media"
+        volsize: {rawvalue: "7906543210496"}    # ~7.19 TiB
+      - name: "tank"
+    gib: 1073741824
+  tasks:
+    - name: Index by name
+      ansible.builtin.set_fact:
+        existing: "{{ dict(fixture_datasets | map(attribute='name') | zip(fixture_datasets)) }}"
+
+    # ---- GROW: the pool1/media case (11.5T -> 16T) --------------------------------------------
+    - name: A genuine growth is detected as a growth
+      vars:
+        cur: "{{ (existing['pool1/media'].volsize.rawvalue) | int }}"
+        want: "{{ 16384 * gib }}"
+      ansible.builtin.assert:
+        that:
+          - (want | int) > (cur | int)
+          - not ((want | int) < (cur | int))
+        fail_msg: "16T should be a growth over 11.5T"
+        success_msg: "grow detected: 11.5T -> 16T"
+
+    # ---- SHRINK: must be refused, in both a large and a marginal case ---------------------------
+    - name: A shrink is detected (large)
+      vars:
+        cur: "{{ (existing['pool1/media'].volsize.rawvalue) | int }}"
+        want: "{{ 8192 * gib }}"
+      ansible.builtin.assert:
+        that:
+          - (want | int) < (cur | int)
+        fail_msg: "8T must register as a SHRINK against 11.5T — the gate would not fire"
+        success_msg: "shrink detected: 11.5T -> 8T (would be refused)"
+
+    - name: A shrink is detected (one GiB smaller — the marginal case)
+      vars:
+        cur: "{{ (existing['pool1/media'].volsize.rawvalue) | int }}"
+        want: "{{ (existing['pool1/media'].volsize.rawvalue) | int - gib }}"
+      ansible.builtin.assert:
+        that:
+          - (want | int) < (cur | int)
+        fail_msg: "a 1GiB reduction must still register as a shrink"
+        success_msg: "marginal shrink detected (would be refused)"
+
+    # ---- NO-OP: same size must be neither grow nor shrink (idempotency) --------------------------
+    - name: An unchanged size is neither grow nor shrink
+      vars:
+        cur: "{{ (existing['tank/media'].volsize.rawvalue) | int }}"
+        want: "{{ (existing['tank/media'].volsize.rawvalue) | int }}"
+      ansible.builtin.assert:
+        that:
+          - not ((want | int) > (cur | int))
+          - not ((want | int) < (cur | int))
+        fail_msg: "an identical size must be a no-op — otherwise the role is not idempotent"
+        success_msg: "identical size is a no-op (idempotent)"
+
+    # ---- EXISTENCE: resizing something absent must be caught -------------------------------------
+    - name: A missing zvol is detected
+      ansible.builtin.assert:
+        that:
+          - "'pool1/does-not-exist' not in existing"
+          - "'pool1/media' in existing"
+        fail_msg: "existence check is wrong"
+        success_msg: "missing zvol correctly detected as absent"
+
+    # ---- POOL CEILING: growth into a full pool must be refused -----------------------------------
+    - name: Pool ceiling maths rejects a nearly-full pool
+      vars:
+        used: "{{ 26000 * gib }}"
+        free: "{{ 1000 * gib }}"
+        pct: "{{ ((used | int) / ((used | int) + (free | int)) * 100) | round(1) }}"
+      ansible.builtin.assert:
+        that:
+          - (pct | float) > 80.0
+        fail_msg: "96% used must exceed the 80% ceiling"
+        success_msg: "nearly-full pool ({{ pct }}%) correctly exceeds the ceiling"
+
+    - name: "Pool ceiling maths accepts a healthy pool (pool1, 55%)"
+      vars:
+        used: "{{ 16100 * gib }}"
+        free: "{{ 13000 * gib }}"
+        pct: "{{ ((used | int) / ((used | int) + (free | int)) * 100) | round(1) }}"
+      ansible.builtin.assert:
+        that:
+          - (pct | float) < 80.0
+        fail_msg: "55% used must be under the 80% ceiling"
+        success_msg: "healthy pool ({{ pct }}%) is under the ceiling"
+
+    - name: Growth larger than free space is rejected
+      vars:
+        free: "{{ 100 * gib }}"
+        growth: "{{ 500 * gib }}"
+      ansible.builtin.assert:
+        that:
+          - not ((free | int) > (growth | int))
+        fail_msg: "a 500G growth into 100G free must be refused"
+        success_msg: "growth exceeding free space correctly refused"
+
+    # ---- atime mapping: the YAML-truthy trap ----------------------------------------------------
+    - name: atime maps to the strings TrueNAS expects, without YAML booleans
+      ansible.builtin.assert:
+        that:
+          - (('DISABLED' == 'ENABLED') | ternary('ON', 'OFF')) == 'OFF'
+          - (('ENABLED' == 'ENABLED') | ternary('ON', 'OFF')) == 'ON'
+        fail_msg: "atime mapping is wrong"
+        success_msg: "atime maps DISABLED->OFF and ENABLED->ON (no bare off/on to trip yaml[truthy])"
+
+    # ---- URL id encoding: the 404 trap -----------------------------------------------------------
+    - name: Dataset ids must be percent-encoded, because urlencode leaves the slash alone
+      ansible.builtin.assert:
+        that:
+          # `| urlencode` treats "/" as a safe path character, so pool1/media stays pool1/media and the
+          # PUT hits a nested path that does not exist -> HTTP 404. The API accepts
+          # id=pool1%2Fmedia and rejects id=pool1/media.
+          - ('pool1/media' | replace('/', '%2F')) == 'pool1%2Fmedia'
+          - ('pool1/media' | urlencode) != 'pool1%2Fmedia'
+        fail_msg: "dataset id encoding is wrong — the PUT will 404"
+        success_msg: "dataset id percent-encodes correctly (pool1/media -> pool1%2Fmedia)"

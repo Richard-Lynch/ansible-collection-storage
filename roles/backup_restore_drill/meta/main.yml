@@ -1,0 +1,18 @@
+---
+galaxy_info:
+  role_name: backup_restore_drill
+  namespace: richard_lynch
+  author: Richard Lynch
+  description: >-
+    Prove a restore: verify restic repo integrity, restore the latest
+    snapshot to a scratch target, assert expected artifacts return non-empty, and optionally drill
+    a ZFS snapshot rollback on a throwaway dataset. Read-only against the repo.
+  license: GPL-3.0-or-later
+  min_ansible_version: "2.15"
+  galaxy_tags:
+    - backup
+    - restore
+    - restic
+    - zfs
+    - recovery
+dependencies: []

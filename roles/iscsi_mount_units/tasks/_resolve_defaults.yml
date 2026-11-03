@@ -1,0 +1,65 @@
+---
+# AUTO-GENERATED defaults resolver — DO NOT EDIT.
+#
+# Source of truth: roles/iscsi_mount_units/meta/argument_specs.py
+# Regenerate:      venv/bin/python tools/argspec/cli.py x generate iscsi_mount_units
+#
+# Edits here are silently overwritten on the next generation. To change a value or its
+# documentation, change the OptionSpec in the source file above — descriptions there
+# are emitted as the comments in this file.
+
+# Binds every declared option to its generated default, so a caller-supplied value
+# wins and an unsupplied one falls back rather than evaluating Undefined.
+#
+# Include this FIRST from every entrypoint:
+#   - ansible.builtin.include_tasks: _resolve_defaults.yml
+#
+# Role-specific setup logic belongs in tasks/setup_vars.yml, NOT here — this file is
+# overwritten on every generation.
+#
+# TWO BRANCHES, because `set_fact` persists for the whole play. A role invoked twice in
+# one play would otherwise see its OWN leftover facts on the second call, so a later
+# caller that omitted an option silently inherited the earlier caller's value instead of
+# the declared default. On a repeat call this ignores the role's own facts and rebinds
+# the defaults; an include-level `vars:` shadows the fact, so a value the caller DID
+# supply this time still wins. Roles called once per play only ever run the first branch.
+
+- name: Resolve declared options over their generated defaults
+  ansible.builtin.set_fact:
+    iscsi_units_apply: "{{ iscsi_units_apply | default(iscsi_units_apply__default) if iscsi_units_apply__default is defined else iscsi_units_apply | default(omit) }}"
+    iscsi_units_portal_port: "{{ iscsi_units_portal_port | default(iscsi_units_portal_port__default) if iscsi_units_portal_port__default is defined else iscsi_units_portal_port | default(omit) }}"
+    iscsi_units_lun: "{{ iscsi_units_lun | default(iscsi_units_lun__default) if iscsi_units_lun__default is defined else iscsi_units_lun | default(omit) }}"
+    iscsi_units_fs_type: "{{ iscsi_units_fs_type | default(iscsi_units_fs_type__default) if iscsi_units_fs_type__default is defined else iscsi_units_fs_type | default(omit) }}"
+    iscsi_units_mount_options: "{{ iscsi_units_mount_options | default(iscsi_units_mount_options__default) if iscsi_units_mount_options__default is defined else iscsi_units_mount_options | default(omit) }}"
+    iscsi_units_portal_wait_tries: "{{ iscsi_units_portal_wait_tries | default(iscsi_units_portal_wait_tries__default) if iscsi_units_portal_wait_tries__default is defined else iscsi_units_portal_wait_tries | default(omit) }}"
+    iscsi_units_portal_wait_delay: "{{ iscsi_units_portal_wait_delay | default(iscsi_units_portal_wait_delay__default) if iscsi_units_portal_wait_delay__default is defined else iscsi_units_portal_wait_delay | default(omit) }}"
+    iscsi_units_portal_probe_timeout: "{{ iscsi_units_portal_probe_timeout | default(iscsi_units_portal_probe_timeout__default) if iscsi_units_portal_probe_timeout__default is defined else iscsi_units_portal_probe_timeout | default(omit) }}"
+    iscsi_units_restart_sec: "{{ iscsi_units_restart_sec | default(iscsi_units_restart_sec__default) if iscsi_units_restart_sec__default is defined else iscsi_units_restart_sec | default(omit) }}"
+    iscsi_units_mount_timeout: "{{ iscsi_units_mount_timeout | default(iscsi_units_mount_timeout__default) if iscsi_units_mount_timeout__default is defined else iscsi_units_mount_timeout | default(omit) }}"
+    iscsi_units_stage_dir: "{{ iscsi_units_stage_dir | default(iscsi_units_stage_dir__default) if iscsi_units_stage_dir__default is defined else iscsi_units_stage_dir | default(omit) }}"
+    iscsi_units_show_diff: "{{ iscsi_units_show_diff | default(iscsi_units_show_diff__default) if iscsi_units_show_diff__default is defined else iscsi_units_show_diff | default(omit) }}"
+    iscsi_units_systemd_dir: "{{ iscsi_units_systemd_dir | default(iscsi_units_systemd_dir__default) if iscsi_units_systemd_dir__default is defined else iscsi_units_systemd_dir | default(omit) }}"
+    iscsi_units_doc_path: "{{ iscsi_units_doc_path | default(iscsi_units_doc_path__default) if iscsi_units_doc_path__default is defined else iscsi_units_doc_path | default(omit) }}"
+  when: not (_iscsi_mount_units__argspec_resolved | default(false))
+
+- name: Rebind the defaults on a repeat call, ignoring this role's own leftover facts
+  ansible.builtin.set_fact:
+    iscsi_units_apply: "{{ iscsi_units_apply__default if iscsi_units_apply__default is defined else iscsi_units_apply | default(omit) }}"
+    iscsi_units_portal_port: "{{ iscsi_units_portal_port__default if iscsi_units_portal_port__default is defined else iscsi_units_portal_port | default(omit) }}"
+    iscsi_units_lun: "{{ iscsi_units_lun__default if iscsi_units_lun__default is defined else iscsi_units_lun | default(omit) }}"
+    iscsi_units_fs_type: "{{ iscsi_units_fs_type__default if iscsi_units_fs_type__default is defined else iscsi_units_fs_type | default(omit) }}"
+    iscsi_units_mount_options: "{{ iscsi_units_mount_options__default if iscsi_units_mount_options__default is defined else iscsi_units_mount_options | default(omit) }}"
+    iscsi_units_portal_wait_tries: "{{ iscsi_units_portal_wait_tries__default if iscsi_units_portal_wait_tries__default is defined else iscsi_units_portal_wait_tries | default(omit) }}"
+    iscsi_units_portal_wait_delay: "{{ iscsi_units_portal_wait_delay__default if iscsi_units_portal_wait_delay__default is defined else iscsi_units_portal_wait_delay | default(omit) }}"
+    iscsi_units_portal_probe_timeout: "{{ iscsi_units_portal_probe_timeout__default if iscsi_units_portal_probe_timeout__default is defined else iscsi_units_portal_probe_timeout | default(omit) }}"
+    iscsi_units_restart_sec: "{{ iscsi_units_restart_sec__default if iscsi_units_restart_sec__default is defined else iscsi_units_restart_sec | default(omit) }}"
+    iscsi_units_mount_timeout: "{{ iscsi_units_mount_timeout__default if iscsi_units_mount_timeout__default is defined else iscsi_units_mount_timeout | default(omit) }}"
+    iscsi_units_stage_dir: "{{ iscsi_units_stage_dir__default if iscsi_units_stage_dir__default is defined else iscsi_units_stage_dir | default(omit) }}"
+    iscsi_units_show_diff: "{{ iscsi_units_show_diff__default if iscsi_units_show_diff__default is defined else iscsi_units_show_diff | default(omit) }}"
+    iscsi_units_systemd_dir: "{{ iscsi_units_systemd_dir__default if iscsi_units_systemd_dir__default is defined else iscsi_units_systemd_dir | default(omit) }}"
+    iscsi_units_doc_path: "{{ iscsi_units_doc_path__default if iscsi_units_doc_path__default is defined else iscsi_units_doc_path | default(omit) }}"
+  when: _iscsi_mount_units__argspec_resolved | default(false)
+
+- name: Record that this role has resolved its options in this play
+  ansible.builtin.set_fact:
+    _iscsi_mount_units__argspec_resolved: true

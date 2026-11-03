@@ -1,0 +1,12 @@
+---
+galaxy_info:
+  role_name: restic_backup
+  namespace: richard_lynch
+  author: Richard Lynch
+  description: >-
+    Install restic + a systemd-timed backup of a host's critical small state (dumped DBs, configs,
+    zones) to an Object-Locked Backblaze B2 bucket. DBs are dumped (not copied live); this host's B2
+    key is append-only (cannot delete) — the ransomware control.
+  license: GPL-3.0-or-later
+  min_ansible_version: "2.14"
+dependencies: []

@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Fake md5sum: deterministic, content irrelevant to the assertions.
+echo "d41d8cd98f00b204e9800998ecf8427e  $1"
+exit 0

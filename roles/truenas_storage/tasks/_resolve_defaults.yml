@@ -1,0 +1,51 @@
+---
+# AUTO-GENERATED defaults resolver — DO NOT EDIT.
+#
+# Source of truth: roles/truenas_storage/meta/argument_specs.py
+# Regenerate:      venv/bin/python tools/argspec/cli.py x generate truenas_storage
+#
+# Edits here are silently overwritten on the next generation. To change a value or its
+# documentation, change the OptionSpec in the source file above — descriptions there
+# are emitted as the comments in this file.
+
+# Binds every declared option to its generated default, so a caller-supplied value
+# wins and an unsupplied one falls back rather than evaluating Undefined.
+#
+# Include this FIRST from every entrypoint:
+#   - ansible.builtin.include_tasks: _resolve_defaults.yml
+#
+# Role-specific setup logic belongs in tasks/setup_vars.yml, NOT here — this file is
+# overwritten on every generation.
+#
+# TWO BRANCHES, because `set_fact` persists for the whole play. A role invoked twice in
+# one play would otherwise see its OWN leftover facts on the second call, so a later
+# caller that omitted an option silently inherited the earlier caller's value instead of
+# the declared default. On a repeat call this ignores the role's own facts and rebinds
+# the defaults; an include-level `vars:` shadows the fact, so a value the caller DID
+# supply this time still wins. Roles called once per play only ever run the first branch.
+
+- name: Resolve declared options over their generated defaults
+  ansible.builtin.set_fact:
+    truenas_storage_api_user: "{{ truenas_storage_api_user | default(truenas_storage_api_user__default) if truenas_storage_api_user__default is defined else truenas_storage_api_user | default(omit) }}"
+    truenas_storage_validate_certs: "{{ truenas_storage_validate_certs | default(truenas_storage_validate_certs__default) if truenas_storage_validate_certs__default is defined else truenas_storage_validate_certs | default(omit) }}"
+    truenas_storage_zvols: "{{ truenas_storage_zvols | default(truenas_storage_zvols__default) if truenas_storage_zvols__default is defined else truenas_storage_zvols | default(omit) }}"
+    truenas_storage_datasets: "{{ truenas_storage_datasets | default(truenas_storage_datasets__default) if truenas_storage_datasets__default is defined else truenas_storage_datasets | default(omit) }}"
+    truenas_storage_destroy: "{{ truenas_storage_destroy | default(truenas_storage_destroy__default) if truenas_storage_destroy__default is defined else truenas_storage_destroy | default(omit) }}"
+    truenas_storage_pool_ceiling: "{{ truenas_storage_pool_ceiling | default(truenas_storage_pool_ceiling__default) if truenas_storage_pool_ceiling__default is defined else truenas_storage_pool_ceiling | default(omit) }}"
+    truenas_storage_apply: "{{ truenas_storage_apply | default(truenas_storage_apply__default) if truenas_storage_apply__default is defined else truenas_storage_apply | default(omit) }}"
+  when: not (_truenas_storage__argspec_resolved | default(false))
+
+- name: Rebind the defaults on a repeat call, ignoring this role's own leftover facts
+  ansible.builtin.set_fact:
+    truenas_storage_api_user: "{{ truenas_storage_api_user__default if truenas_storage_api_user__default is defined else truenas_storage_api_user | default(omit) }}"
+    truenas_storage_validate_certs: "{{ truenas_storage_validate_certs__default if truenas_storage_validate_certs__default is defined else truenas_storage_validate_certs | default(omit) }}"
+    truenas_storage_zvols: "{{ truenas_storage_zvols__default if truenas_storage_zvols__default is defined else truenas_storage_zvols | default(omit) }}"
+    truenas_storage_datasets: "{{ truenas_storage_datasets__default if truenas_storage_datasets__default is defined else truenas_storage_datasets | default(omit) }}"
+    truenas_storage_destroy: "{{ truenas_storage_destroy__default if truenas_storage_destroy__default is defined else truenas_storage_destroy | default(omit) }}"
+    truenas_storage_pool_ceiling: "{{ truenas_storage_pool_ceiling__default if truenas_storage_pool_ceiling__default is defined else truenas_storage_pool_ceiling | default(omit) }}"
+    truenas_storage_apply: "{{ truenas_storage_apply__default if truenas_storage_apply__default is defined else truenas_storage_apply | default(omit) }}"
+  when: _truenas_storage__argspec_resolved | default(false)
+
+- name: Record that this role has resolved its options in this play
+  ansible.builtin.set_fact:
+    _truenas_storage__argspec_resolved: true

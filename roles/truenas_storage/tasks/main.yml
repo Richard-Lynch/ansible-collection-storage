@@ -1,0 +1,403 @@
+---
+# truenas_storage — reconcile zvol sizes and datasets on TrueNAS via its REST API.
+#
+# Exists so storage layout is DECLARED in code instead of typed as ad-hoc `zfs` over SSH: a change
+# made through a reviewed play is repeatable and leaves a record; a hand-typed one does neither.
+#
+# GROW-ONLY for zvols, deliberately. ZFS cannot shrink a zvol, and setting volsize below the size of
+# the filesystem living on it destroys data. The role refuses to shrink rather than trusting the
+# caller; there is no flag to override that.
+
+- name: Resolve declared options over their generated defaults
+  # GENERATED from meta/argument_specs.py — binds every declared option to its default, so a
+  # default can never be declared-but-dead (the variable evaluating Undefined at run time).
+  ansible.builtin.include_tasks: _resolve_defaults.yml
+
+- name: Assert the API password was supplied (an empty value is not a password)
+  ansible.builtin.assert:
+    that:
+      - _tn_pass | length > 0
+    fail_msg: "truenas_storage_api_password is empty; resolve it from the caller's secret store."
+    quiet: true
+
+# --- read current state -----------------------------------------------------------------------
+- name: Fetch pool status
+  ansible.builtin.uri:
+    url: "{{ _tn_url }}/pool"
+    method: GET
+    user: "{{ _tn_user }}"
+    password: "{{ _tn_pass }}"
+    force_basic_auth: true
+    validate_certs: "{{ _tn_verify }}"
+    return_content: true
+  register: _tn_pools
+  changed_when: false
+
+- name: Fetch existing datasets and zvols
+  ansible.builtin.uri:
+    url: "{{ _tn_url }}/pool/dataset"
+    method: GET
+    user: "{{ _tn_user }}"
+    password: "{{ _tn_pass }}"
+    force_basic_auth: true
+    validate_certs: "{{ _tn_verify }}"
+    return_content: true
+  register: _tn_datasets
+  changed_when: false
+
+- name: Index what exists, by name
+  ansible.builtin.set_fact:
+    _tn_existing: >-
+      {{ dict(_tn_datasets.json | map(attribute='name') | zip(_tn_datasets.json)) }}
+    _tn_pool_usage: >-
+      {{ dict(_tn_pools.json | map(attribute='name')
+              | zip(_tn_pools.json | map(attribute='topology') | map('default', {}, true))) }}
+
+# --- zvols: grow only -------------------------------------------------------------------------
+- name: Compute the zvol change set
+  ansible.builtin.set_fact:
+    _tn_zvol_changes: "{{ _tn_zvol_changes | default([]) + [_change] }}"
+  vars:
+    # `.volsize` on a real dict that LACKS the key raises UndefinedError — `default({})` only
+    # catches an undefined variable, not a missing attribute. A FILESYSTEM dataset has no volsize,
+    # so use .get() semantics and degrade to 0 rather than blowing up mid-run.
+    _cur: "{{ (_tn_existing[item.name] | default({})).get('volsize', {}) }}"
+    _cur_bytes: "{{ (_cur.get('rawvalue', 0)) | int }}"
+    _want_bytes: "{{ (item.volsize_gb | int) * 1024 * 1024 * 1024 }}"
+    _change:
+      name: "{{ item.name }}"
+      exists: "{{ item.name in _tn_existing }}"
+      current_bytes: "{{ _cur_bytes }}"
+      wanted_bytes: "{{ _want_bytes }}"
+      current_gb: "{{ (_cur_bytes | int / 1024 / 1024 / 1024) | round(1) }}"
+      wanted_gb: "{{ item.volsize_gb }}"
+      grows: "{{ (_want_bytes | int) > (_cur_bytes | int) }}"
+      shrinks: "{{ (_want_bytes | int) < (_cur_bytes | int) }}"
+  loop: "{{ truenas_storage_zvols | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: HARD GATE — every named zvol must already exist
+  # Creating a zvol is a different decision (block size, sparseness, parent pool) and must not
+  # happen as a side effect of a resize.
+  ansible.builtin.assert:
+    that:
+      - item.exists | bool
+    fail_msg: >-
+      Zvol {{ item.name }} does not exist on this appliance. This role RESIZES zvols; it does not
+      create them. Known: {{ _tn_existing.keys() | list | sort }}
+    quiet: true
+  loop: "{{ _tn_zvol_changes | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: HARD GATE — refuse to shrink a zvol
+  # ZFS cannot shrink a zvol. Setting volsize below the consumer filesystem's size destroys data,
+  # and there is no undo. Deliberately not overridable.
+  ansible.builtin.assert:
+    that:
+      - not (item.shrinks | bool)
+    fail_msg: >-
+      REFUSING to shrink {{ item.name }}: {{ item.current_gb }}G -> {{ item.wanted_gb }}G. ZFS cannot
+      shrink a zvol, and a volsize below the filesystem on it destroys data. If the intent really is
+      a smaller volume, that is a create-migrate-destroy, not a resize.
+    quiet: true
+  loop: "{{ _tn_zvol_changes | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Read pool capacity for anything we are about to grow
+  ansible.builtin.uri:
+    url: "{{ _tn_url }}/pool/dataset/id/{{ item.name.split('/')[0] }}"
+    method: GET
+    user: "{{ _tn_user }}"
+    password: "{{ _tn_pass }}"
+    force_basic_auth: true
+    validate_certs: "{{ _tn_verify }}"
+    return_content: true
+  register: _tn_pool_room
+  changed_when: false
+  failed_when: false
+  loop: "{{ _tn_zvol_changes | default([]) | selectattr('grows', 'equalto', true) | list }}"
+  loop_control:
+    label: "{{ item.name.split('/')[0] }}"
+
+- name: HARD GATE — the pool must have room, and headroom
+  # Growing a thin zvol into a nearly-full pool is how you wedge a host: ZFS degrades sharply past
+  # ~80% and a genuinely full pool can block writes for everything sharing it.
+  ansible.builtin.assert:
+    that:
+      - item.json is defined
+      - _free_bytes | int > (item.item.wanted_bytes | int) - (item.item.current_bytes | int)
+      - _used_pct | float < (truenas_storage_pool_ceiling | default(truenas_storage_pool_ceiling__default) | float)
+    fail_msg: >-
+      Pool {{ item.item.name.split('/')[0] }} cannot safely take this growth: {{ _used_pct }}% used
+      (ceiling {{ truenas_storage_pool_ceiling | default(truenas_storage_pool_ceiling__default) }}%),
+      {{ (_free_bytes | int / 1024 / 1024 / 1024) | round(1) }}G free, growth needs
+      {{ ((item.item.wanted_bytes | int - item.item.current_bytes | int) / 1024 / 1024 / 1024) | round(1) }}G.
+    quiet: true
+  vars:
+    # same missing-attribute hazard as above — .get() not .attr | default()
+    _avail: "{{ (item.json | default({})).get('available', {}) }}"
+    _used: "{{ (item.json | default({})).get('used', {}) }}"
+    _free_bytes: "{{ _avail.get('rawvalue', 0) | int }}"
+    _used_bytes: "{{ _used.get('rawvalue', 0) | int }}"
+    _used_pct: >-
+      {{ ((_used_bytes | int) / ((_used_bytes | int) + (_free_bytes | int)) * 100) | round(1)
+         if ((_used_bytes | int) + (_free_bytes | int)) > 0 else 0 }}
+  loop: "{{ _tn_pool_room.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+# NOT `when: item.json is defined`. That silently SKIPPED the gate when the capacity read failed,
+# so a broken check let growth proceed ungated — the same silent-success class as failed_when:false.
+# If we cannot read capacity, we must not grow.
+
+# --- datasets ---------------------------------------------------------------------------------
+- name: Compute the dataset change set
+  ansible.builtin.set_fact:
+    _tn_ds_changes: "{{ _tn_ds_changes | default([]) + [_change] }}"
+  vars:
+    _change:
+      name: "{{ item.name }}"
+      exists: "{{ item.name in _tn_existing }}"
+      spec: "{{ item }}"
+  loop: "{{ truenas_storage_datasets | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+# --- destruction: guarded heavily, because it is irreversible -----------------------------------
+- name: Gather everything that could reference a destroy target
+  ansible.builtin.uri:
+    url: "{{ _tn_url }}/{{ item }}"
+    method: GET
+    user: "{{ _tn_user }}"
+    password: "{{ _tn_pass }}"
+    force_basic_auth: true
+    validate_certs: "{{ _tn_verify }}"
+    return_content: true
+  loop: ["iscsi/extent", "sharing/nfs", "sharing/smb", "replication"]
+  register: _tn_refs
+  changed_when: false
+  when: truenas_storage_destroy | default([]) | length > 0
+
+- name: HARD GATE — every destroy must be explicitly confirmed
+  ansible.builtin.assert:
+    that:
+      - (item.confirm | default('')) == 'yes'
+    fail_msg: >-
+      {{ item.name }} is listed for destruction without `confirm: yes`. Destroying a dataset is
+      irreversible; the confirmation is deliberate friction, not a formality.
+    quiet: true
+  loop: "{{ truenas_storage_destroy | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: HARD GATE — the target must exist and match the size you expect
+  # Guards against a stale plan: if the thing has grown or shrunk since you looked, you are not
+  # destroying what you thought you were, so stop.
+  ansible.builtin.assert:
+    that:
+      - item.name in _tn_existing
+      - (_actual_gb | float) >= (item.expect_used_gb | float) * 0.95
+      - (_actual_gb | float) <= (item.expect_used_gb | float) * 1.05
+    fail_msg: >-
+      {{ item.name }}: expected ~{{ item.expect_used_gb }}G but the appliance reports
+      {{ _actual_gb }}G{{ '' if item.name in _tn_existing else ' (dataset not found)' }}. REFUSING —
+      re-check what this actually holds before destroying it.
+    quiet: true
+  vars:
+    _actual_gb: >-
+      {{ (((_tn_existing[item.name] | default({})).get('used', {})).get('rawvalue', 0) | int)
+         / 1024 / 1024 / 1024 | round(1) }}
+  loop: "{{ truenas_storage_destroy | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: HARD GATE — nothing may still reference the target
+  # An iSCSI extent, share or replication task pointing at it means it is still in USE, whatever the
+  # plan says. This is what stops a destroy aimed at the wrong zvol.
+  ansible.builtin.assert:
+    that:
+      - _refs_hit | int == 0
+    fail_msg: >-
+      {{ item.name }} is still referenced by an iSCSI extent, NFS/SMB share or replication task
+      ({{ _refs_hit }} reference(s)). REFUSING to destroy something still wired up.
+    success_msg: "{{ item.name }}: no iSCSI/share/replication references — safe to destroy."
+    quiet: true
+  vars:
+    _refs_hit: >-
+      {{ (_tn_refs.results | default([]) | map(attribute='json') | map('default', [], true)
+          | map('to_json') | join(' ')).count(item.name) }}
+  loop: "{{ truenas_storage_destroy | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Report the destroy plan
+  ansible.builtin.debug:
+    msg: >-
+      DESTROY {{ item.name }} (~{{ item.expect_used_gb }}G, recursive — snapshots included).
+      IRREVERSIBLE.
+  loop: "{{ truenas_storage_destroy | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Destroy datasets/zvols
+  ansible.builtin.uri:
+    url: "{{ _tn_url }}/pool/dataset/id/{{ item.name | replace('/', '%2F') }}"
+    method: DELETE
+    user: "{{ _tn_user }}"
+    password: "{{ _tn_pass }}"
+    force_basic_auth: true
+    validate_certs: "{{ _tn_verify }}"
+    body_format: json
+    body:
+      recursive: true
+    status_code: [200]
+  loop: "{{ truenas_storage_destroy | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: _tn_destroyed
+  changed_when: true
+  failed_when: false
+  when: truenas_storage_apply | default(truenas_storage_apply__default) | bool
+
+# --- report -----------------------------------------------------------------------------------
+- name: Report the zvol plan
+  ansible.builtin.debug:
+    msg: >-
+      zvol {{ item.name }}: {{ item.current_gb }}G ->
+      {{ item.wanted_gb }}G {{ '(GROW)' if item.grows | bool else '(no change)' }}
+  loop: "{{ _tn_zvol_changes | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Report the dataset plan
+  ansible.builtin.debug:
+    msg: "dataset {{ item.name }}: {{ 'CREATE' if not (item.exists | bool) else 'exists (left alone)' }}"
+  loop: "{{ _tn_ds_changes | default([]) }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Report that nothing will be applied (generate-don't-apply)
+  ansible.builtin.debug:
+    msg: >-
+      truenas_storage_apply=false — nothing was changed. Review the plan above, then re-run with
+      EXTRA='truenas_storage_apply=true'.
+  when: not (truenas_storage_apply | default(truenas_storage_apply__default) | bool)
+
+# --- apply --------------------------------------------------------------------------------------
+- name: Grow zvols
+  ansible.builtin.uri:
+    url: "{{ _tn_url }}/pool/dataset/id/{{ item.name | replace('/', '%2F') }}"
+    method: PUT
+    user: "{{ _tn_user }}"
+    password: "{{ _tn_pass }}"
+    force_basic_auth: true
+    validate_certs: "{{ _tn_verify }}"
+    body_format: json
+    body:
+      volsize: "{{ item.wanted_bytes | int }}"
+    status_code: [200]
+  loop: "{{ _tn_zvol_changes | default([]) | selectattr('grows', 'equalto', true) | list }}"
+  loop_control:
+    label: "{{ item.name }} -> {{ item.wanted_gb }}G"
+  register: _tn_grown
+  changed_when: true
+  # NOT no_log. The credential is in the request we SEND (already redacted by `uri` for basic auth),
+  # while the response carries the reason a resize was rejected. Hiding it makes the role
+  # undebuggable — a failure would report only "see log".
+  failed_when: false
+  when: truenas_storage_apply | default(truenas_storage_apply__default) | bool
+
+- name: Create datasets
+  ansible.builtin.uri:
+    url: "{{ _tn_url }}/pool/dataset"
+    method: POST
+    user: "{{ _tn_user }}"
+    password: "{{ _tn_pass }}"
+    force_basic_auth: true
+    validate_certs: "{{ _tn_verify }}"
+    body_format: json
+    body: >-
+      {{ {'name': item.spec.name, 'type': 'FILESYSTEM',
+          'compression': (item.spec.compression | default('lz4')) | upper,
+          'atime': ((item.spec.atime | default('DISABLED')) == 'ENABLED') | ternary('ON', 'OFF')}
+         | combine(item.spec.comments is defined | ternary({'comments': item.spec.comments | default('')}, {}))
+         | combine(item.spec.quota_gb is defined
+                   | ternary({'quota': (item.spec.quota_gb | default(0) | int) * 1024 * 1024 * 1024}, {})) }}
+    status_code: [200]
+  loop: "{{ _tn_ds_changes | default([]) | selectattr('exists', 'equalto', false) | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: _tn_created
+  changed_when: true
+  failed_when: false
+  when: truenas_storage_apply | default(truenas_storage_apply__default) | bool
+
+- name: HARD GATE — surface any API error from the writes
+  # failed_when:false above keeps the response readable; this turns a real failure back into a
+  # failure, with the appliance's own message.
+  ansible.builtin.assert:
+    that:
+      - (item.status | default(0) | int) in [200]
+    fail_msg: >-
+      TrueNAS rejected {{ item.item.name | default('a change') }}:
+      HTTP {{ item.status | default('?') }} — {{ item.json | default(item.msg) | default('no detail') }}
+    quiet: true
+  loop: >-
+    {{ (_tn_grown.results | default([])) + (_tn_created.results | default([]))
+       + (_tn_destroyed.results | default([])) }}
+  loop_control:
+    label: "{{ item.item.name | default('?') }}"
+  when:
+    - truenas_storage_apply | default(truenas_storage_apply__default) | bool
+    - item.status is defined
+
+# --- verify ---------------------------------------------------------------------------------------
+- name: Re-read state after applying
+  ansible.builtin.uri:
+    url: "{{ _tn_url }}/pool/dataset"
+    method: GET
+    user: "{{ _tn_user }}"
+    password: "{{ _tn_pass }}"
+    force_basic_auth: true
+    validate_certs: "{{ _tn_verify }}"
+    return_content: true
+  register: _tn_after
+  changed_when: false
+  when:
+    - truenas_storage_apply | default(truenas_storage_apply__default) | bool
+    - (_tn_zvol_changes | default([]) | selectattr('grows', 'equalto', true) | list | length > 0) or (_tn_ds_changes | default([]) | selectattr('exists',
+      'equalto', false) | list | length > 0)
+
+- name: HARD GATE — the appliance must report the sizes we asked for
+  ansible.builtin.assert:
+    that:
+      - _after_size | int >= (item.wanted_bytes | int)
+    fail_msg: >-
+      {{ item.name }} did not take the new size: asked for {{ item.wanted_gb }}G, appliance reports
+      {{ (_after_size | int / 1024 / 1024 / 1024) | round(1) }}G.
+    success_msg: "{{ item.name }} is now {{ item.wanted_gb }}G."
+    quiet: true
+  vars:
+    _match: >-
+      {{ (_tn_after.json | default([]) | selectattr('name', 'equalto', item.name) | list | first) | default({}) }}
+    _after_size: "{{ (_match.get('volsize', {})).get('rawvalue', 0) }}"
+  loop: "{{ _tn_zvol_changes | default([]) | selectattr('grows', 'equalto', true) | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - truenas_storage_apply | default(truenas_storage_apply__default) | bool
+    - _tn_after is not skipped
+
+- name: Note the consumer-side follow-up for grown zvols
+  # Growing the zvol does NOT grow the filesystem on it. An iSCSI consumer must rescan and then
+  # extend its filesystem — that is a separate, host-side play.
+  ansible.builtin.debug:
+    msg: >-
+      {{ item.name }} grown to {{ item.wanted_gb }}G. The CONSUMER filesystem is still the old size:
+      on the iSCSI initiator, rescan the session and grow the filesystem before the space is usable.
+  loop: "{{ _tn_zvol_changes | default([]) | selectattr('grows', 'equalto', true) | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: truenas_storage_apply | default(truenas_storage_apply__default) | bool

@@ -1,0 +1,78 @@
+---
+# Verify the role's size + file-type gates in both directions, against the fixtures converge.yml
+# built. Tested in both directions so each gate is proven to fire, not just to exist: a gate only
+# ever exercised on the happy path can be broken and still pass.
+- name: Verify size + type guards
+  hosts: localhost
+  gather_facts: false
+  vars:
+    stub_dir: /tmp/molecule-truenas-config-backup
+    min_size_bytes: 102400 # matches truenas_config_backup_min_size_bytes__default
+
+  tasks:
+    - name: Stat the GOOD fixture
+      ansible.builtin.stat:
+        path: "{{ stub_dir }}/good.tar"
+      register: _good
+
+    - name: Stat the BAD-tiny fixture (the known failure mode)
+      ansible.builtin.stat:
+        path: "{{ stub_dir }}/bad-tiny.tar"
+      register: _bad_tiny
+
+    - name: Stat the BAD-wrongtype fixture
+      ansible.builtin.stat:
+        path: "{{ stub_dir }}/bad-wrongtype.tar"
+      register: _bad_wrongtype
+
+    - name: Identify each fixture's file type (same `file -b` the role runs)
+      ansible.builtin.command: "file -b {{ item }}"
+      loop:
+        - "{{ stub_dir }}/good.tar"
+        - "{{ stub_dir }}/bad-tiny.tar"
+        - "{{ stub_dir }}/bad-wrongtype.tar"
+      register: _filetypes
+      changed_when: false
+
+    - name: The GOOD fixture PASSES both the size gate and the type gate
+      ansible.builtin.assert:
+        that:
+          - _good.stat.exists
+          - _good.stat.size | int >= min_size_bytes
+          - _filetypes.results[0].stdout is search('tar archive')
+        fail_msg: "GOOD fixture should have passed size + type gates."
+        success_msg: "GOOD fixture accepted, as it should be."
+        quiet: true
+
+    - name: The BAD-tiny fixture FAILS the size gate (a 2048-byte file that looks like a backup)
+      ansible.builtin.assert:
+        that:
+          - _bad_tiny.stat.exists
+          - not (_bad_tiny.stat.size | int >= min_size_bytes)
+          - _bad_tiny.stat.size | int == 2048
+        fail_msg: "BAD-tiny fixture should have failed the size gate — the exact regression being guarded against."
+        success_msg: "BAD-tiny fixture correctly rejected by the size gate (2048 bytes < 100KB floor)."
+        quiet: true
+
+    - name: The BAD-wrongtype fixture PASSES the size gate but FAILS the type gate
+      ansible.builtin.assert:
+        that:
+          - _bad_wrongtype.stat.exists
+          - _bad_wrongtype.stat.size | int >= min_size_bytes
+          - not (_filetypes.results[2].stdout is search('tar archive'))
+          - not (_filetypes.results[2].stdout is search('SQLite'))
+        fail_msg: >-
+          BAD-wrongtype fixture should be large enough to pass the size gate but still get caught by
+          the type gate — this proves size alone is not a sufficient guard (an error page can be
+          padded past 100KB).
+        success_msg: "BAD-wrongtype fixture correctly rejected by the type gate despite passing the size gate."
+        quiet: true
+
+    - name: A SQLite-magic fixture would pass the type gate too (guards the fallback-to-raw-db path)
+      vars:
+        _sqlite_report: "SQLite 3.x database, last written using SQLite version 3045000"
+      ansible.builtin.assert:
+        that:
+          - _sqlite_report is search('SQLite')
+        success_msg: "Type-gate regex accepts SQLite as well as tar — the raw-DB fallback artefact would pass."
+        quiet: true
