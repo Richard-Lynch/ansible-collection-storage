@@ -7,6 +7,7 @@
 .github/workflows/disclose.yml
 .github/workflows/release.yml
 .gitignore
+.python-version
 CHANGELOG.md
 LICENSE
 README.md
@@ -15,6 +16,7 @@ devkit.toml
 export.manifest
 galaxy.yml
 meta/runtime.yml
+renovate.json
 roles/backup_restore_drill/README.md
 roles/backup_restore_drill/defaults/SKIP
 roles/backup_restore_drill/defaults/main.yml
