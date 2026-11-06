@@ -11,6 +11,7 @@
 CHANGELOG.md
 LICENSE
 README.md
+ci/affected-scenarios.sh
 configured_roles.txt
 devkit.toml
 export.manifest
@@ -103,3 +104,6 @@ roles/truenas_storage/molecule/default/verify.yml
 roles/truenas_storage/tasks/_resolve_defaults.yml
 roles/truenas_storage/tasks/main.yml
 roles/truenas_storage/vars/main.yml
+tests/sanity/ignore-2.19.txt
+tests/sanity/ignore-2.20.txt
+tests/sanity/ignore-2.21.txt

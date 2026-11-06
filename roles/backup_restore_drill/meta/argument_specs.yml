@@ -23,6 +23,7 @@ argument_specs:
           - restic repo password (defaults to restic_backup_password).
         type: str
         required: false
+        no_log: true
       restore_drill_b2_key_id:
         description:
           - B2 key id (defaults to restic_backup_b2_key_id).
@@ -33,6 +34,7 @@ argument_specs:
           - B2 app key (defaults to restic_backup_b2_app_key).
         type: str
         required: false
+        no_log: true
       restore_drill_target:
         description:
           - Scratch restore dir (wiped each run; never a live path).

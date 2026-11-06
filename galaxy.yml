@@ -4,7 +4,7 @@
 ---
 namespace: richard_lynch
 name: storage
-version: 1.0.1
+version: 1.0.2
 readme: README.md
 authors:
   - Richard Lynch
@@ -25,6 +25,7 @@ homepage: https://github.com/Richard-Lynch/ansible-collection-storage
 issues: https://github.com/Richard-Lynch/ansible-collection-storage/issues
 build_ignore:
   - .ansible-lint
+  - ci
   - configured_roles.txt
   - roles/*/defaults/SKIP
   - .github

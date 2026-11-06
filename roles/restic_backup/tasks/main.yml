@@ -39,6 +39,10 @@
     owner: root
     group: root
     mode: "0700"
+  # The script carries the repository password and the B2 keys: --diff would print them, and a
+  # failed task its result.
+  no_log: true
+  diff: false
 
 - name: Install the systemd service
   ansible.builtin.copy:
