@@ -9,6 +9,17 @@ All notable changes to this collection are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the collection
 uses [Semantic Versioning](https://semver.org/).
 
+## [1.0.2] — 2026-11-06
+
+### Changed
+
+- The CI, release and disclose callers use ansible-devkit `v0.4.1`.
+
+### Fixed
+
+- `restic_backup` installs its backup script, which carries the repository password and the B2 keys, with `no_log` and `diff: false`, so `--diff` and a failed task's result no longer print them.
+- `backup_restore_drill`: `restore_drill_password` and `restore_drill_b2_app_key` are `no_log` in the argument spec.
+
 ## [1.0.1] — 2026-11-03
 
 ### Added

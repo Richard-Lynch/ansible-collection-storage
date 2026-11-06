@@ -16,6 +16,7 @@ argument_specs = ArgumentSpecs(
                     description=["restic repo URL to drill (defaults to restic_backup_repo)."],
                 ),
                 "restore_drill_password": OptionSpec(
+                    no_log=True,
                     type="str",
                     required=False,
                     description=["restic repo password (defaults to restic_backup_password)."],
@@ -26,6 +27,7 @@ argument_specs = ArgumentSpecs(
                     description=["B2 key id (defaults to restic_backup_b2_key_id)."],
                 ),
                 "restore_drill_b2_app_key": OptionSpec(
+                    no_log=True,
                     type="str",
                     required=False,
                     description=["B2 app key (defaults to restic_backup_b2_app_key)."],
